@@ -1,0 +1,256 @@
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <DHT.h>
+#include <SoftwareSerial.h>
+
+// Pin definitions
+const int ONE_WIRE_BUS = 2;          // OneWire temperature sensors
+const int DHT_PIN = 10;              // DHT11 sensor pin
+const int HEAT_PUMP_CH_PIN = 3;      // Heat pump CH (Central Heating) mode
+const int HEAT_PUMP_COOLING_PIN = 4; // Heat pump cooling mode
+const int HEAT_PUMP_OFF_PIN = 5;     // Heat pump off signal
+const int BOILER_PIN = 6;            // Boiler control
+const int CIRCULATOR_PUMP_PIN = 7;   // Circulator pump control
+const int TWO_WAY_VALVE_PIN = 8;     // 2-way valve control
+const int DEFROST_INPUT_PIN = 9;     // Defrost mode input signal
+const int HEAT_PUMP_FAIL_PIN = 11;   // Heat pump failure input signal
+const int HC05_RX = 12;              // HC-05 RX pin (connected to Arduino TX)
+const int HC05_TX = 13;              // HC-05 TX pin (connected to Arduino RX)
+const int SOLAR_CIRCULATOR_PUMP_PIN = 14; // Solar circulator pump control
+const int OVERHEAT_VALVE_PIN = 15;   // Overheat one-way valve control
+
+// Temperature thresholds (default values)
+const float DEFAULT_OUTSIDE_HEATING_THRESHOLD = 65;  // Heating mode if outside temp < 65°F
+const float DEFAULT_HEAT_PUMP_MIN_TEMP = 5;          // Heat pump CH mode minimum outside temp
+const float DEFAULT_HEAT_PUMP_OFF_TEMP = -4;         // Heat pump turns off below this outside temp
+const float DEFAULT_DELTA_T_HEATING_THRESHOLD = 20;  // Delta T threshold for heating mode
+const float DEFAULT_DELTA_T_COOLING_THRESHOLD = 5;   // Delta T threshold for cooling mode
+const float DEFAULT_DELTA_T_HEATING_ASSIST = 25;     // Boiler assist threshold in heating mode
+const float DEFAULT_DELTA_T_COOLING_ON = 10;         // Delta T threshold to turn on heat pump in cooling mode
+const float DEFAULT_DELTA_T_HEATING_ON = 25;         // Delta T threshold to turn on heat pump in heating mode
+const float DEFAULT_DEW_POINT_BUFFER = 2.0;          // 2°F buffer above dew point
+
+// Heating mode temperature limits
+const float HEATING_MAX_OUTLET_TEMP = 120;  // Maximum outlet temperature in heating mode
+const float HEATING_MIN_OUTLET_TEMP = 100;  // Minimum outlet temperature in heating mode
+
+// Cooling mode temperature limits
+const float COOLING_MAX_INLET_TEMP = 65;    // Maximum inlet temperature in cooling mode
+const float COOLING_MIN_INLET_TEMP = 42;    // Minimum inlet temperature in cooling mode
+
+// DHW tank and solar collector thresholds
+const float DHW_OVERHEAT_TEMP = 140;        // Overheat temperature for DHW tank
+const float SOLAR_DHW_DELTA_T = 30;         // Temperature difference to activate solar circulator pump
+
+// System states
+enum SystemMode {
+  MODE_HEATING,
+  MODE_COOLING,
+  MODE_DEFROST,
+  MODE_ERROR
+};
+
+// Configuration structure
+struct SystemConfig {
+  float outsideHeatingThreshold;
+  float heatPumpMinTemp;
+  float heatPumpOffTemp;
+  float deltaTHeatingThreshold;
+  float deltaTCoolingThreshold;
+  float deltaTHeatingAssist;
+  float deltaTCoolingOn;
+  float deltaTHeatingOn;
+  float dewPointBuffer;
+};
+
+// Global variables
+SystemConfig config = {
+  DEFAULT_OUTSIDE_HEATING_THRESHOLD,
+  DEFAULT_HEAT_PUMP_MIN_TEMP,
+  DEFAULT_HEAT_PUMP_OFF_TEMP,
+  DEFAULT_DELTA_T_HEATING_THRESHOLD,
+  DEFAULT_DELTA_T_COOLING_THRESHOLD,
+  DEFAULT_DELTA_T_HEATING_ASSIST,
+  DEFAULT_DELTA_T_COOLING_ON,
+  DEFAULT_DELTA_T_HEATING_ON,
+  DEFAULT_DEW_POINT_BUFFER
+};
+
+SystemMode currentMode = MODE_HEATING;
+bool isHeatPumpFailed = false;
+bool isSensorError = false;
+bool solarPumpRunning = false;
+
+// Temperature sensor addresses (replace with your actual addresses)
+DeviceAddress tankOutlet = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0A };
+DeviceAddress tankInlet = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0B };
+DeviceAddress outsideTemp = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0C };
+DeviceAddress dhwTankSensor = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0D };
+DeviceAddress solarCollectorSensor = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0E };
+
+// OneWire and DHT setup
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+DHT dht(DHT_PIN, DHT11);
+
+// HC-05 Bluetooth setup
+SoftwareSerial hc05(HC05_RX, HC05_TX);
+
+// ====================== Setup ====================== //
+void setup() {
+  Serial.begin(9600);
+  hc05.begin(9600);
+  sensors.begin();
+  dht.begin();
+
+  initializePins();
+  watchdogEnable();
+  sendConfigToBluetooth();
+}
+
+// ====================== Main Loop ====================== //
+void loop() {
+  watchdogReset();
+
+  readTemperatures();
+  checkSensorErrors();
+  updateSystemState();
+  controlSolarSystem();
+  checkBluetoothCommands();
+
+  printDebugInfo();
+  nonBlockingDelay(1000);
+}
+
+// ====================== Core Functions ====================== //
+void readTemperatures() {
+  sensors.requestTemperatures();
+  tankOutletTemp = sensors.getTempF(tankOutlet);
+  tankInletTemp = sensors.getTempF(tankInlet);
+  outsideTempF = sensors.getTempF(outsideTemp);
+  dhwTankTemp = sensors.getTempF(dhwTankSensor);
+  solarCollectorTemp = sensors.getTempF(solarCollectorSensor);
+
+  if (tankOutletTemp == -127 || tankInletTemp == -127 || outsideTempF == -127 ||
+      dhwTankTemp == -127 || solarCollectorTemp == -127) {
+    isSensorError = true;
+    return;
+  }
+
+  readDHT();
+}
+
+void readDHT() {
+  static unsigned long lastDHTRead = 0;
+  if (millis() - lastDHTRead > 2000) {
+    utilityHumidity = dht.readHumidity();
+    utilityTempF = dht.readTemperature(true);
+    lastDHTRead = millis();
+
+    if (isnan(utilityHumidity) || isnan(utilityTempF)) {
+      isSensorError = true;
+      return;
+    }
+
+    dewPointF = calculateDewPoint(utilityTempF, utilityHumidity);
+  }
+}
+
+// ====================== State Machine ====================== //
+void updateSystemState() {
+  switch (currentMode) {
+    case MODE_HEATING:
+      controlHeatingMode();
+      break;
+    case MODE_COOLING:
+      controlCoolingMode();
+      break;
+    case MODE_DEFROST:
+      handleDefrostMode();
+      break;
+    case MODE_ERROR:
+      handleSensorError();
+      break;
+  }
+}
+
+// ====================== Heating Mode ====================== //
+void controlHeatingMode() {
+  checkOverheatingProtection();
+  checkFreezingProtection();
+
+  if (isHeatPumpFailed) {
+    handleHeatPumpFailure();
+    return;
+  }
+
+  if (outsideTempF >= config.heatPumpMinTemp && outsideTempF > config.heatPumpOffTemp) {
+    if (calculateDeltaT(tankOutletTemp, tankInletTemp) >= config.deltaTHeatingOn) {
+      setHeatPumpCH();
+      digitalWrite(BOILER_PIN, HIGH);
+    } else if (tankOutletTemp < HEATING_MIN_OUTLET_TEMP) {
+      setHeatPumpCH();
+      digitalWrite(BOILER_PIN, LOW);
+    } else if (calculateDeltaT(tankOutletTemp, tankInletTemp) <= config.deltaTHeatingThreshold) {
+      setHeatPumpOff();
+      digitalWrite(BOILER_PIN, LOW);
+    }
+  } else {
+    setHeatPumpOff();
+    digitalWrite(BOILER_PIN, LOW);
+  }
+}
+
+// ====================== Cooling Mode ====================== //
+void controlCoolingMode() {
+  if (tankInletTemp < COOLING_MIN_INLET_TEMP || tankInletTemp > COOLING_MAX_INLET_TEMP) {
+    setHeatPumpOff();
+    return;
+  }
+
+  if (tankOutletTemp >= (dewPointF + config.dewPointBuffer)) {
+    if (calculateDeltaT(tankOutletTemp, tankInletTemp) >= config.deltaTCoolingOn) {
+      setHeatPumpCooling();
+    } else if (calculateDeltaT(tankOutletTemp, tankInletTemp) <= config.deltaTCoolingThreshold) {
+      setHeatPumpOff();
+    }
+  } else {
+    setHeatPumpOff();
+  }
+}
+
+// ====================== Utility Functions ====================== //
+float calculateDeltaT(float outlet, float inlet) {
+  return abs(outlet - inlet);
+}
+
+float calculateDewPoint(float tempF, float humidity) {
+  float tempC = (tempF - 32) * 5.0 / 9.0;
+  const float a = 17.625;
+  const float b = 243.04;
+  float alpha = log(humidity / 100.0) + (a * tempC) / (b + tempC);
+  float dewPointC = (b * alpha) / (a - alpha);
+  return (dewPointC * 9.0 / 5.0) + 32;
+}
+
+void nonBlockingDelay(unsigned long interval) {
+  static unsigned long lastTime = 0;
+  while (millis() - lastTime < interval) {
+    // Do nothing
+  }
+  lastTime = millis();
+}
+
+// ====================== Debugging ====================== //
+void printDebugInfo() {
+  Serial.print("[DEBUG] ");
+  Serial.print(millis());
+  Serial.print(" | Outlet: ");
+  Serial.print(tankOutletTemp);
+  Serial.print("F | Inlet: ");
+  Serial.print(tankInletTemp);
+  Serial.print("F | Outside: ");
+  Serial.print(outsideTempF);
+  Serial.print("F | Mode: ");
+  Serial.println(currentMode == MODE_HEATING ? "HEATING" : "COOLING");
+}
