@@ -1,0 +1,145 @@
+# SYSTEM PSEUDO-CODE (Sudo Code)
+
+BEGIN System_Setup
+    // Initialize Communications
+    Initialize Serial USB @ 9600 baud
+    Initialize Bluetooth Serial @ 9600 baud
+    
+    // Initialize Sensors
+    Initialize OneWire Bus and Dallas Temperature sensors
+    Initialize DHT11 Humidity/Temp sensor
+    
+    // Hardware Configuration
+    Configure digital pins for Heat Pump (CH, Cooling, Off) as OUTPUT
+    Configure digital pins for Boiler, Pumps, and Valves as OUTPUT
+    Configure digital pins for Defrost and Failure signals as INPUT with Pull-up
+    
+    // Initial Safety State
+    Turn off all components
+    Set Heat Pump to "OFF" state
+    
+    // System Watchdog
+    Enable Hardware Watchdog (8-second timeout)
+    
+    // Initial Report
+    Send current configuration via Bluetooth
+END System_Setup
+
+LOOP (Repeats indefinitely every 1000 milliseconds)
+    Reset Hardware Watchdog
+    
+    // --- Data Acquisition ---
+    PROCEDURE Read_Temperatures:
+        Request data from DS18B20 sensors (Inlet, Outlet, Outside, DHW, Solar)
+        IF any sensor is disconnected (Reads -196.6F):
+            Set Sensor_Error flag = TRUE
+        
+        Every 2 seconds:
+            Read Humidity and Temperature from DHT11
+            Calculate Dew Point based on Humidity and Temp
+    END PROCEDURE
+
+    // --- System Health Monitoring ---
+    PROCEDURE Check_System_Status:
+        Read Heat Pump Failure Pin
+        IF Failure Pin is Active:
+            Set Heat_Pump_Failed flag = TRUE
+        ELSE:
+            Set Heat_Pump_Failed flag = FALSE
+            
+        IF critical sensors (Outlet, Outside) are disconnected:
+            Set Sensor_Error flag = TRUE
+    END PROCEDURE
+
+    // --- Mode Selection Logic ---
+    PROCEDURE Determine_Operating_Mode:
+        // Default mode switching based on season/outside temp
+        IF Outside_Temperature < Outside_Heating_Threshold:
+            IF NOT in ERROR or DEFROST:
+                Set Current_Mode = HEATING
+        ELSE:
+            IF NOT in ERROR or DEFROST:
+                Set Current_Mode = COOLING
+        
+        // Priority Overrides
+        IF Sensor_Error is TRUE:
+            Set Current_Mode = ERROR
+        ELSE IF Defrost_Input_Pin is Active:
+            Set Current_Mode = DEFROST
+            
+        // Recovery logic
+        IF (Current_Mode is ERROR or DEFROST) AND (Issues Cleared):
+            Reset to HEATING or COOLING based on Outside Temp
+    END PROCEDURE
+
+    // --- Main Control Logic (State Machine) ---
+    SWITCH Current_Mode:
+        
+        CASE HEATING:
+            Execute Overheating Protection (Open valve if too hot)
+            Execute Freezing Protection (Circulate water if too cold)
+            
+            IF Heat_Pump_Failed:
+                Activate Boiler
+                Deactivate Heat Pump
+            ELSE IF Outside_Temp > Operating_Minimum:
+                Calculate Delta_T (Outlet - Inlet)
+                IF Delta_T >= High_Threshold:
+                    Set Heat Pump to Heating Mode
+                    Activate Boiler Assist
+                ELSE IF Outlet_Temp < Target_Minimum:
+                    Set Heat Pump to Heating Mode
+                    Deactivate Boiler
+                ELSE IF Delta_T <= Low_Threshold:
+                    Set Heat Pump to OFF
+                    Deactivate Boiler
+            ELSE:
+                Set Heat Pump to OFF
+                Deactivate Boiler
+                
+        CASE COOLING:
+            IF Inlet_Temp is outside safe limits:
+                Set Heat Pump to OFF
+                EXIT CASE
+                
+            // Condensation Protection
+            IF Outlet_Temp >= (Dew_Point + Buffer):
+                Calculate Delta_T
+                IF Delta_T >= High_Threshold:
+                    Set Heat Pump to Cooling Mode
+                ELSE IF Delta_T <= Low_Threshold:
+                    Set Heat Pump to OFF
+            ELSE:
+                Set Heat Pump to OFF (Prevent Condensation)
+                
+        CASE DEFROST:
+            Set Heat Pump to OFF
+            Activate Boiler (Assist during defrost)
+            
+        CASE ERROR:
+            Emergency Shutdown of all heating/cooling outputs
+            Keep basic circulation for safety if possible
+            
+    END SWITCH
+
+    // --- Auxiliary Systems ---
+    PROCEDURE Control_Solar_Thermal:
+        IF DHW_Tank < Safe_Limit AND (Solar_Collector - DHW_Tank) > 30F:
+            Activate Solar Pump
+        ELSE IF (Solar_Collector - DHW_Tank) < 15F OR DHW_Tank >= Safe_Limit:
+            Deactivate Solar Pump
+    END PROCEDURE
+
+    // --- Communication and UI ---
+    PROCEDURE Bluetooth_Interface:
+        Check for incoming data from Bluetooth
+        IF command received:
+            Update Settings (Thresholds, Min Temp, etc.)
+            Acknowledge by sending current settings back
+    END PROCEDURE
+
+    PROCEDURE Debug_Output:
+        Print sensor values, current mode, and relay states to USB Serial
+    END PROCEDURE
+
+END LOOP
