@@ -1,13 +1,25 @@
 #include <SoftwareSerial.h>
 
 /**
- * Nextion Display Interface for Arduino
+ * Nextion Display Interface for HVAC System
  *
- * This module handles communication with a Nextion HMI display.
- * It uses SoftwareSerial on pins 16 (A2) and 17 (A3) to avoid
- * conflicts with the existing HVAC controller pin assignments.
+ * This module handles communication with a Nextion HMI display,
+ * including status reporting for Heating/Cooling/DHW modes
+ * and command processing for testing.
  */
 
+// --- System State (Shared with HVAC Controller) ---
+enum SystemMode {
+  MODE_HEATING,
+  MODE_COOLING,
+  MODE_DEFROST,
+  MODE_ERROR
+};
+
+SystemMode currentMode = MODE_HEATING;
+bool solarPumpRunning = false; // Represents DHW mode status
+
+// --- Nextion Configuration ---
 // SoftwareSerial pins: RX=16 (A2), TX=17 (A3)
 SoftwareSerial nextion(16, 17);
 
@@ -16,53 +28,61 @@ const uint8_t nextionTerminator[] = { 0xFF, 0xFF, 0xFF };
 
 // ====================== Setup ====================== //
 void setup() {
-  // Debug serial
   Serial.begin(9600);
-
-  // Nextion serial
   nextion.begin(9600);
-
-  Serial.println(F("Nextion Interface Initialized"));
+  Serial.println(F("Nextion HVAC Interface Initialized"));
 }
 
 // ====================== Main Loop ====================== //
 void loop() {
-  // Handle incoming data from Nextion
+  // Handle incoming commands from Nextion
   receiveNextionData();
 
-  // Periodic update demonstration
+  // Periodic status update to Nextion
   static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate > 5000) {
-    updateNextionText("t0", "System OK");
-    updateNextionNumber("n0", 25);
+  if (millis() - lastUpdate > 2000) {
+    updateHmiStatus();
     lastUpdate = millis();
-    Serial.println(F("Sent periodic update to Nextion"));
   }
 }
 
-// ====================== Outgoing Communication ====================== //
+// ====================== Status Reporting ====================== //
 
 /**
- * Sends a raw command string to the Nextion display.
+ * Transmits the current system mode and DHW status to the Nextion display.
  */
+void updateHmiStatus() {
+  // Update main mode text
+  if (currentMode == MODE_HEATING) {
+    updateNextionText("t0", "Heating");
+  } else if (currentMode == MODE_COOLING) {
+    updateNextionText("t0", "Cooling");
+  } else if (currentMode == MODE_ERROR) {
+    updateNextionText("t0", "ERROR");
+  }
+
+  // Update DHW (Solar) status
+  if (solarPumpRunning) {
+    updateNextionText("t1", "DHW: ON");
+  } else {
+    updateNextionText("t1", "DHW: OFF");
+  }
+
+  Serial.println(F("HMI Status Updated"));
+}
+
+// ====================== Outgoing Communication Helpers ====================== //
+
 void sendNextionCommand(String cmd) {
   nextion.print(cmd);
   nextion.write(nextionTerminator, 3);
 }
 
-/**
- * Updates a text component on the Nextion display.
- * Example: updateNextionText("t0", "Hello") -> t0.txt="Hello"
- */
 void updateNextionText(String component, String value) {
   String cmd = component + ".txt=\"" + value + "\"";
   sendNextionCommand(cmd);
 }
 
-/**
- * Updates a numeric component on the Nextion display.
- * Example: updateNextionNumber("n0", 123) -> n0.val=123
- */
 void updateNextionNumber(String component, int value) {
   String cmd = component + ".val=" + String(value);
   sendNextionCommand(cmd);
@@ -72,42 +92,65 @@ void updateNextionNumber(String component, int value) {
 
 /**
  * Reads and parses incoming data from the Nextion display.
- * Focuses on parsing Touch Events (0x65).
  */
 void receiveNextionData() {
-  if (nextion.available() >= 7) {
-    if (nextion.peek() == 0x65) {
-      uint8_t buffer[7];
-      nextion.readBytes(buffer, 7);
+  static String inputBuffer = "";
 
-      // Verify termination bytes
-      if (buffer[4] == 0xFF && buffer[5] == 0xFF && buffer[6] == 0xFF) {
-        uint8_t pageId = buffer[1];
-        uint8_t componentId = buffer[2];
-        uint8_t eventType = buffer[3]; // 0x01 Press, 0x00 Release
+  while (nextion.available()) {
+    char c = nextion.read();
 
-        Serial.print(F("Nextion Touch Event: Page "));
-        Serial.print(pageId);
-        Serial.print(F(", Component "));
-        Serial.print(componentId);
-        Serial.println(eventType == 0x01 ? F(" Pressed") : F(" Released"));
-
-        // Handle specific component actions here
-        handleTouchComponent(pageId, componentId, eventType);
-      }
-    } else {
-      // Clear non-touch event data from buffer to prevent hanging
-      nextion.read();
+    // Check for Nextion return codes (e.g., Touch Event 0x65)
+    if ((uint8_t)c == 0x65) {
+      // Handle standard touch event if needed (read next 6 bytes)
+      uint8_t touchBuffer[6];
+      nextion.readBytes(touchBuffer, 6);
+      Serial.println(F("Received Nextion Touch Event"));
+      continue;
     }
+
+    // Buffer characters for string commands (testing purpose)
+    if (c == '\n' || c == '\r') {
+      if (inputBuffer.length() > 0) {
+        processHmiCommand(inputBuffer);
+        inputBuffer = "";
+      }
+    } else if ((uint8_t)c != 0xFF) {
+      inputBuffer += c;
+    }
+
+    // Alternative: check if buffer matches user's specific strings
+    if (inputBuffer == "cooling") { processHmiCommand("cooling"); inputBuffer = ""; }
+    else if (inputBuffer == "Heating") { processHmiCommand("Heating"); inputBuffer = ""; }
+    else if (inputBuffer == "DHWandHeating") { processHmiCommand("DHWandHeating"); inputBuffer = ""; }
+    else if (inputBuffer == "DHWandcooling") { processHmiCommand("DHWandcooling"); inputBuffer = ""; }
   }
 }
 
 /**
- * Example handler for specific touch events.
+ * Processes commands received from the Nextion for testing purposes.
  */
-void handleTouchComponent(uint8_t page, uint8_t component, uint8_t event) {
-  // Logic to respond to specific button presses
-  if (page == 0 && component == 1 && event == 0x01) {
-    Serial.println(F("Button ID 1 on Page 0 was pressed!"));
+void processHmiCommand(String cmd) {
+  cmd.trim();
+  Serial.print(F("Processing HMI Command: "));
+  Serial.println(cmd);
+
+  if (cmd == "cooling") {
+    currentMode = MODE_COOLING;
+    solarPumpRunning = false;
   }
+  else if (cmd == "Heating") {
+    currentMode = MODE_HEATING;
+    solarPumpRunning = false;
+  }
+  else if (cmd == "DHWandHeating") {
+    currentMode = MODE_HEATING;
+    solarPumpRunning = true;
+  }
+  else if (cmd == "DHWandcooling") {
+    currentMode = MODE_COOLING;
+    solarPumpRunning = true;
+  }
+
+  // Immediately update HMI after change
+  updateHmiStatus();
 }
