@@ -136,16 +136,16 @@ void updateHmiDisplay() {
 
   // t0: Heat pump mode status
   if (currentMode == MODE_COOLING) {
-    updateNextionText("t0", "HP Cooling");
+    updateNextionText("t0", "HeatPumpCooling");
   } else if (currentMode == MODE_HEATING) {
-    updateNextionText("t0", "HP Heating");
+    updateNextionText("t0", "HeatPumpHeating");
   } else {
     updateNextionText("t0", "HP OFF");
   }
 
   // t1: Boiler status
   if (digitalRead(BOILER_PIN) == HIGH) {
-    updateNextionText("t1", "Boiler ON");
+    updateNextionText("t1", "Boiler Heating");
   } else {
     updateNextionText("t1", "Boiler OFF");
   }
