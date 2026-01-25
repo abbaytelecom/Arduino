@@ -52,20 +52,17 @@ void loop() {
 
 /**
  * Transmits the current system mode and DHW status to the Nextion display.
- * If in Cooling mode, sends "Cooling". If in Heating mode, sends "Heating".
  */
 void updateHmiStatus() {
-  // Update main mode text component (e.g., t0)
-  if (currentMode == MODE_HEATING) {
-    updateNextionText("t0", "Heating");
-  } else if (currentMode == MODE_COOLING) {
-    updateNextionText("t0", "Cooling");
-  } else if (currentMode == MODE_ERROR) {
-    updateNextionText("t0", "ERROR");
+  // Update main mode text component (t0)
+  switch (currentMode) {
+    case MODE_HEATING: updateNextionText("t0", "Heating"); break;
+    case MODE_COOLING: updateNextionText("t0", "Cooling"); break;
+    case MODE_DEFROST: updateNextionText("t0", "Defrost"); break;
+    case MODE_ERROR:   updateNextionText("t0", "ERROR");   break;
   }
 
-  // Update DHW status component (e.g., t1)
-  // DHW can be on at the same time as cooling or heating.
+  // Update DHW status component (t1)
   if (solarPumpRunning) {
     updateNextionText("t1", "DHW: ON");
   } else {
@@ -77,17 +74,11 @@ void updateHmiStatus() {
 
 // ====================== Outgoing Communication Helpers ====================== //
 
-/**
- * Sends a raw command to Nextion via Serial1.
- */
 void sendNextionCommand(String cmd) {
   Serial1.print(cmd);
   Serial1.write(nextionTerminator, 3);
 }
 
-/**
- * Updates a text component on the Nextion display.
- */
 void updateNextionText(String component, String value) {
   String cmd = component + ".txt=\"" + value + "\"";
   sendNextionCommand(cmd);
@@ -96,19 +87,13 @@ void updateNextionText(String component, String value) {
 // ====================== Incoming Communication ====================== //
 
 /**
- * Reads data from Nextion and parses specific testing commands.
- * Handles: "cooling", "Heating", "DHWandHeating", "DHWandcooling"
+ * Reads data from Nextion and parses numeric commands '1' through '6'.
  */
 void receiveNextionData() {
-  static String inputBuffer = "";
-
   while (Serial1.available()) {
     char c = Serial1.read();
 
-    // Ignore Nextion termination bytes in the string buffer
-    if ((uint8_t)c == 0xFF) continue;
-
-    // Handle standard Nextion return codes (e.g. Touch Event 0x65)
+    // Check for standard Nextion return codes (e.g. Touch Event 0x65)
     if ((uint8_t)c == 0x65) {
       uint8_t touchBuffer[6];
       Serial1.readBytes(touchBuffer, 6);
@@ -116,49 +101,35 @@ void receiveNextionData() {
       continue;
     }
 
-    // Process string-based testing commands
-    if (c == '\n' || c == '\r') {
-      if (inputBuffer.length() > 0) {
-        processHmiCommand(inputBuffer);
-        inputBuffer = "";
-      }
-    } else {
-      inputBuffer += c;
+    // Process numeric commands '1'-'6' (sent as ASCII or raw bytes)
+    if (c >= '1' && c <= '6') {
+      processNumericCommand(c);
     }
-
-    // Check for direct matches if no newline is sent
-    if (inputBuffer == "cooling") { processHmiCommand("cooling"); inputBuffer = ""; }
-    else if (inputBuffer == "Heating") { processHmiCommand("Heating"); inputBuffer = ""; }
-    else if (inputBuffer == "DHWandHeating") { processHmiCommand("DHWandHeating"); inputBuffer = ""; }
-    else if (inputBuffer == "DHWandcooling") { processHmiCommand("DHWandcooling"); inputBuffer = ""; }
+    else if ((uint8_t)c >= 1 && (uint8_t)c <= 6) {
+      processNumericCommand(c + '0');
+    }
   }
 }
 
 /**
- * Processes the testing commands and updates internal state.
+ * Maps numeric inputs to system state changes.
+ * 1: Heating, 2: Cooling, 3: Defrost, 4: Error
+ * 5: DHW ON, 6: DHW OFF
  */
-void processHmiCommand(String cmd) {
-  cmd.trim();
-  Serial.print(F("HMI Command Received: "));
-  Serial.println(cmd);
+void processNumericCommand(char cmdChar) {
+  Serial.print(F("Numeric Command Received: "));
+  Serial.println(cmdChar);
 
-  if (cmd == "cooling") {
-    currentMode = MODE_COOLING;
-    solarPumpRunning = false;
-  }
-  else if (cmd == "Heating") {
-    currentMode = MODE_HEATING;
-    solarPumpRunning = false;
-  }
-  else if (cmd == "DHWandHeating") {
-    currentMode = MODE_HEATING;
-    solarPumpRunning = true;
-  }
-  else if (cmd == "DHWandcooling") {
-    currentMode = MODE_COOLING;
-    solarPumpRunning = true;
+  switch (cmdChar) {
+    case '1': currentMode = MODE_HEATING; break;
+    case '2': currentMode = MODE_COOLING; break;
+    case '3': currentMode = MODE_DEFROST; break;
+    case '4': currentMode = MODE_ERROR;   break;
+    case '5': solarPumpRunning = true;    break;
+    case '6': solarPumpRunning = false;   break;
+    default: return; // Should not happen due to caller check
   }
 
-  // Refresh display immediately
+  // Synchronize HMI immediately
   updateHmiStatus();
 }
