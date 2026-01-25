@@ -28,14 +28,19 @@ const int OVERHEAT_VALVE_PIN = 15;
 
 // System states
 enum SystemMode {
-  MODE_HEATING,
-  MODE_COOLING,
+  MODE_OFF,
+  MODE_HEAT_PUMP_COOLING,
+  MODE_HEAT_PUMP_CH,
+  MODE_HEAT_PUMP_DHW,
+  MODE_BOILER_CH,
+  MODE_SOLAR_DHW,
   MODE_DEFROST,
+  MODE_DHW_OVERHEAT,
   MODE_ERROR
 };
 
 // Global variables
-SystemMode currentMode = MODE_HEATING;
+SystemMode currentMode = MODE_HEAT_PUMP_CH;
 bool isHeatPumpFailed = false;
 bool isSensorError = false;
 bool solarPumpRunning = false;
@@ -130,13 +135,13 @@ void readSensors() {
     isSensorError = false;
   }
 
-  // Logic: if OutsideTemp > 15 C (59 F) -> Cooling, else Heating
+  // Logic: if OutsideTemp > 15 C (59 F) -> HeatPumpCooling, else HeatPumpHeating
   // Conversion: (T(°F) - 32) × 5/9 = T(°C)
   float outsideTempC = (outsideTempF - 32.0) * 5.0 / 9.0;
   if (outsideTempC > 15.0) {
-    currentMode = MODE_COOLING;
+    currentMode = MODE_HEAT_PUMP_COOLING;
   } else {
-    currentMode = MODE_HEATING;
+    currentMode = MODE_HEAT_PUMP_CH;
   }
 
   // Logic: if Solar 120-140 F -> DHW ON
@@ -165,23 +170,23 @@ void updateHmiDisplay() {
   updateNextionNumber("n5", (int)utilityHumidity);
 
   // t0: Heat pump mode status
-  if (currentMode == MODE_COOLING) {
-    updateNextionText("t0", "HeatPumpCooling");
-  } else if (currentMode == MODE_HEATING) {
-    updateNextionText("t0", "HeatPumpHeating");
-  } else {
-    updateNextionText("t0", "HP OFF");
+  switch (currentMode) {
+    case MODE_HEAT_PUMP_COOLING: updateNextionText("t0", "HeatPumpCooling"); break;
+    case MODE_HEAT_PUMP_CH:      updateNextionText("t0", "HeatPumpHeating"); break;
+    case MODE_OFF:               updateNextionText("t0", "HP OFF");           break;
+    case MODE_ERROR:             updateNextionText("t0", "ERROR");            break;
+    default:                     updateNextionText("t0", "HP ACTIVE");        break;
   }
 
   // t1: Boiler status
-  if (digitalRead(BOILER_PIN) == HIGH) {
+  if (currentMode == MODE_BOILER_CH || digitalRead(BOILER_PIN) == HIGH) {
     updateNextionText("t1", "Boiler Heating");
   } else {
     updateNextionText("t1", "Boiler OFF");
   }
 
   // t2: DHW status
-  if (solarPumpRunning) {
+  if (solarPumpRunning || currentMode == MODE_SOLAR_DHW || currentMode == MODE_HEAT_PUMP_DHW) {
     updateNextionText("t2", "DHW ON");
   } else {
     updateNextionText("t2", "DHW OFF");
@@ -230,12 +235,18 @@ void processManualCommand(char cmd) {
   Serial.println(cmd);
 
   switch (cmd) {
-    case '1': currentMode = MODE_HEATING; break;
-    case '2': currentMode = MODE_COOLING; break;
-    case '3': currentMode = MODE_DEFROST; break;
-    case '4': currentMode = MODE_ERROR;   break;
-    case '5': solarPumpRunning = true;    break;
-    case '6': solarPumpRunning = false;   break;
+    case '1': currentMode = MODE_HEAT_PUMP_CH;      break;
+    case '2': currentMode = MODE_HEAT_PUMP_COOLING; break;
+    case '3': currentMode = MODE_DEFROST;           break;
+    case '4': currentMode = MODE_ERROR;             break;
+    case '5':
+      solarPumpRunning = true;
+      currentMode = MODE_SOLAR_DHW;
+      break;
+    case '6':
+      solarPumpRunning = false;
+      currentMode = MODE_OFF;
+      break;
   }
 
   updateHmiDisplay();
