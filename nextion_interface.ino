@@ -1,9 +1,6 @@
 /**
  * Nextion Display Interface for Arduino GIGA R1
  *
- * This module handles communication with a Nextion HMI display using
- * the Hardware Serial (Serial1) available on the Arduino GIGA R1.
- *
  * Hardware Connection:
  * - Nextion TX -> GIGA R1 Pin 0 (RX1)
  * - Nextion RX -> GIGA R1 Pin 1 (TX1)
@@ -19,42 +16,92 @@ enum SystemMode {
 };
 
 SystemMode currentMode = MODE_HEATING;
-bool solarPumpRunning = false; // Represents DHW mode status
+bool solarPumpRunning = false;
+
+// --- Simulated Sensor Variables ---
+int inletTempF = 0;
+int outletTempF = 0;
+int dhwTempF = 0;
+int outsideTempC = 0;
+int solarTempF = 0;
+int humidityPct = 0;
 
 // Nextion protocol termination sequence
 const uint8_t nextionTerminator[] = { 0xFF, 0xFF, 0xFF };
 
 // ====================== Setup ====================== //
 void setup() {
-  // USB Serial for debugging
   Serial.begin(9600);
+  Serial1.begin(9600); // GIGA R1 Hardware Serial 1
 
-  // Hardware Serial 1 for Nextion Display
-  Serial1.begin(9600);
+  // Seed random for testing
+  randomSeed(analogRead(0));
 
-  Serial.println(F("Nextion GIGA R1 Interface Initialized"));
+  Serial.println(F("Nextion GIGA Simulation Interface Initialized"));
 }
 
 // ====================== Main Loop ====================== //
 void loop() {
-  // Handle incoming data from Nextion
+  // Handle incoming numeric commands from Nextion
   receiveNextionData();
 
-  // Periodic status update to Nextion
-  static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate > 2000) {
-    updateHmiStatus();
-    lastUpdate = millis();
+  // Periodic simulation update
+  static unsigned long lastSimulation = 0;
+  if (millis() - lastSimulation > 5000) {
+    generateSimulatedData();
+    updateHmiDisplay();
+    lastSimulation = millis();
   }
+}
+
+// ====================== Simulation Logic ====================== //
+
+/**
+ * Randomly generates sensor values and updates system state based on thresholds.
+ * As per AGENTS.md:
+ * - Outside > 15C -> Cooling, else Heating.
+ * - Solar 120-140F -> DHW ON.
+ */
+void generateSimulatedData() {
+  inletTempF = random(40, 80);
+  outletTempF = random(40, 120);
+  dhwTempF = random(50, 150);
+  outsideTempC = random(5, 35); // 5C to 35C
+  solarTempF = random(80, 160);
+  humidityPct = random(20, 95);
+
+  // Apply Logic based on Outside Temp (Celsius)
+  if (outsideTempC > 15) {
+    currentMode = MODE_COOLING;
+  } else {
+    currentMode = MODE_HEATING;
+  }
+
+  // Apply Logic based on Solar Temp (Fahrenheit)
+  if (solarTempF >= 120 && solarTempF <= 140) {
+    solarPumpRunning = true;
+  } else {
+    solarPumpRunning = false;
+  }
+
+  Serial.println(F("Generated new simulation data"));
 }
 
 // ====================== Status Reporting ====================== //
 
 /**
- * Transmits the current system mode and DHW status to the Nextion display.
+ * Updates Nextion numeric and text components.
  */
-void updateHmiStatus() {
-  // Update main mode text component (t0)
+void updateHmiDisplay() {
+  // Update Numeric components n0 to n5
+  updateNextionNumber("n0", inletTempF);
+  updateNextionNumber("n1", outletTempF);
+  updateNextionNumber("n2", dhwTempF);
+  updateNextionNumber("n3", outsideTempC);
+  updateNextionNumber("n4", solarTempF);
+  updateNextionNumber("n5", humidityPct);
+
+  // Update Status Text (t0)
   switch (currentMode) {
     case MODE_HEATING: updateNextionText("t0", "Heating"); break;
     case MODE_COOLING: updateNextionText("t0", "Cooling"); break;
@@ -62,17 +109,17 @@ void updateHmiStatus() {
     case MODE_ERROR:   updateNextionText("t0", "ERROR");   break;
   }
 
-  // Update DHW status component (t1)
+  // Update DHW Text (t1)
   if (solarPumpRunning) {
     updateNextionText("t1", "DHW: ON");
   } else {
     updateNextionText("t1", "DHW: OFF");
   }
 
-  Serial.println(F("Sent status update to Nextion"));
+  Serial.println(F("HMI Display Synchronized"));
 }
 
-// ====================== Outgoing Communication Helpers ====================== //
+// ====================== Communication Helpers ====================== //
 
 void sendNextionCommand(String cmd) {
   Serial1.print(cmd);
@@ -84,52 +131,49 @@ void updateNextionText(String component, String value) {
   sendNextionCommand(cmd);
 }
 
+void updateNextionNumber(String component, int value) {
+  String cmd = component + ".val=" + String(value);
+  sendNextionCommand(cmd);
+}
+
 // ====================== Incoming Communication ====================== //
 
 /**
- * Reads data from Nextion and parses numeric commands '1' through '6'.
+ * Parses numeric commands 1-6 from Nextion.
  */
 void receiveNextionData() {
   while (Serial1.available()) {
     char c = Serial1.read();
 
-    // Check for standard Nextion return codes (e.g. Touch Event 0x65)
-    if ((uint8_t)c == 0x65) {
-      uint8_t touchBuffer[6];
-      Serial1.readBytes(touchBuffer, 6);
-      Serial.println(F("Received Touch Event from Nextion"));
-      continue;
-    }
-
-    // Process numeric commands '1'-'6' (sent as ASCII or raw bytes)
+    // Check for numeric commands (ASCII or raw)
     if (c >= '1' && c <= '6') {
-      processNumericCommand(c);
+      processCommand(c);
     }
     else if ((uint8_t)c >= 1 && (uint8_t)c <= 6) {
-      processNumericCommand(c + '0');
+      processCommand(c + '0');
+    }
+
+    // Standard Touch Event (0x65)
+    if ((uint8_t)c == 0x65) {
+      uint8_t buf[6];
+      Serial1.readBytes(buf, 6);
     }
   }
 }
 
-/**
- * Maps numeric inputs to system state changes.
- * 1: Heating, 2: Cooling, 3: Defrost, 4: Error
- * 5: DHW ON, 6: DHW OFF
- */
-void processNumericCommand(char cmdChar) {
-  Serial.print(F("Numeric Command Received: "));
-  Serial.println(cmdChar);
+void processCommand(char cmd) {
+  Serial.print(F("Manual Command: "));
+  Serial.println(cmd);
 
-  switch (cmdChar) {
+  switch (cmd) {
     case '1': currentMode = MODE_HEATING; break;
     case '2': currentMode = MODE_COOLING; break;
     case '3': currentMode = MODE_DEFROST; break;
     case '4': currentMode = MODE_ERROR;   break;
     case '5': solarPumpRunning = true;    break;
     case '6': solarPumpRunning = false;   break;
-    default: return; // Should not happen due to caller check
   }
 
-  // Synchronize HMI immediately
-  updateHmiStatus();
+  // Update HMI to show manual change
+  updateHmiDisplay();
 }

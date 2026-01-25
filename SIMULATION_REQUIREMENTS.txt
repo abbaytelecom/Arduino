@@ -1,0 +1,14 @@
+User Request (2025-05-24):
+1. Add a function that randomly generates:
+   - InletTemperature
+   - OutletTempature
+   - DHWTemperature
+   - OutsideTempreature
+   - Solar Temperature
+   - Humidity
+2. Output these numbers to Nextion components n0 to n5.
+3. Operational Logic:
+   - If OutsideTempreature (Outemp) > 15°C -> Cooling mode.
+   - If OutsideTempreature < 15°C -> Heating mode.
+   - If Solar Temperature is 120-140°F -> DHW is ON.
+4. Hardware: Arduino GIGA R1 WiFi, using Serial1.
