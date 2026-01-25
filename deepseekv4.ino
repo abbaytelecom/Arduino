@@ -1,3 +1,7 @@
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <DHT.h>
+
 /**
  * Smart HVAC & Solar Controller (Arduino GIGA R1 Version)
  * with Nextion Display Interface
@@ -46,6 +50,18 @@ float utilityHumidity = 0;
 float utilityTempF = 0;
 float dewPointF = 0;
 
+// Temperature sensor addresses
+DeviceAddress tankOutlet = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0A };
+DeviceAddress tankInlet = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0B };
+DeviceAddress outsideTemp = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0C };
+DeviceAddress dhwTankSensor = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0D };
+DeviceAddress solarCollectorSensor = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0E };
+
+// OneWire and DHT setup
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+DHT dht(DHT_PIN, DHT11);
+
 // Nextion protocol termination sequence
 const uint8_t nextionTerminator[] = { 0xFF, 0xFF, 0xFF };
 
@@ -53,6 +69,9 @@ const uint8_t nextionTerminator[] = { 0xFF, 0xFF, 0xFF };
 void setup() {
   Serial.begin(9600);   // Debug
   Serial1.begin(9600);  // Nextion
+
+  sensors.begin();
+  dht.begin();
 
   // Initialize pins
   pinMode(HEAT_PUMP_CH_PIN, OUTPUT);
@@ -67,7 +86,6 @@ void setup() {
   pinMode(DEFROST_INPUT_PIN, INPUT_PULLUP);
   pinMode(HEAT_PUMP_FAIL_PIN, INPUT_PULLUP);
 
-  randomSeed(analogRead(0));
   Serial.println(F("HVAC Controller with Nextion Initialized (GIGA R1)"));
 }
 
@@ -76,53 +94,65 @@ void loop() {
   // Handle HMI input
   receiveNextionData();
 
-  // Periodic Simulation & Display Update
+  // Periodic Hardware Update
   static unsigned long lastUpdate = 0;
   if (millis() - lastUpdate > 3000) {
-    generateSimulatedData();
+    readSensors();
     updateHmiDisplay();
     lastUpdate = millis();
   }
 }
 
-// ====================== Simulation Logic ====================== //
+// ====================== Sensor Acquisition ====================== //
 
 /**
- * Randomly generates sensor values and updates system state based on user thresholds.
+ * Acquires data from physical DS18B20 and DHT11 sensors.
+ * Replaces random simulation.
  */
-void generateSimulatedData() {
-  tankInletTemp = random(40, 80);
-  tankOutletTemp = random(40, 120);
-  dhwTankTemp = random(50, 150);
+void readSensors() {
+  sensors.requestTemperatures();
+  tankOutletTemp = sensors.getTempF(tankOutlet);
+  tankInletTemp = sensors.getTempF(tankInlet);
+  outsideTempF = sensors.getTempF(outsideTemp);
+  dhwTankTemp = sensors.getTempF(dhwTankSensor);
+  solarCollectorTemp = sensors.getTempF(solarCollectorSensor);
 
-  // Simulated Outside Temp in Celsius then convert to F
-  int outsideC = random(5, 35);
-  outsideTempF = (outsideC * 9.0 / 5.0) + 32.0;
+  // Read DHT sensor
+  utilityHumidity = dht.readHumidity();
+  utilityTempF = dht.readTemperature(true);
 
-  solarCollectorTemp = random(80, 160);
-  utilityHumidity = random(20, 95);
+  // Check for basic sensor disconnects
+  if (outsideTempF == -196.6 || tankOutletTemp == -196.6) {
+    isSensorError = true;
+    currentMode = MODE_ERROR;
+    return;
+  } else {
+    isSensorError = false;
+  }
 
-  // Logic: if Outemp > 15 C (59 F) -> Cooling, else Heating
-  if (outsideC > 15) {
+  // Logic: if OutsideTemp > 15 C (59 F) -> Cooling, else Heating
+  // Conversion: (T(°F) - 32) × 5/9 = T(°C)
+  float outsideTempC = (outsideTempF - 32.0) * 5.0 / 9.0;
+  if (outsideTempC > 15.0) {
     currentMode = MODE_COOLING;
   } else {
     currentMode = MODE_HEATING;
   }
 
   // Logic: if Solar 120-140 F -> DHW ON
-  if (solarCollectorTemp >= 120 && solarCollectorTemp <= 140) {
+  if (solarCollectorTemp >= 120.0 && solarCollectorTemp <= 140.0) {
     solarPumpRunning = true;
   } else {
     solarPumpRunning = false;
   }
 
-  Serial.print(F("Simulated - Outside: ")); Serial.print(outsideC); Serial.println(F("C"));
+  Serial.print(F("Real Data - Outside: ")); Serial.print(outsideTempC); Serial.println(F("C"));
 }
 
 // ====================== HMI Communication ====================== //
 
 /**
- * Updates Nextion components as requested:
+ * Updates Nextion components:
  * n0-n5 for sensors, t0-t2 for status.
  */
 void updateHmiDisplay() {
@@ -177,14 +207,10 @@ void updateNextionNumber(String component, int value) {
 
 // ====================== HMI Input Handling ====================== //
 
-/**
- * Parses numeric commands 1-6 for manual testing overrides.
- */
 void receiveNextionData() {
   while (Serial1.available()) {
     char c = Serial1.read();
 
-    // Process numeric commands 1-6
     if (c >= '1' && c <= '6') {
       processManualCommand(c);
     }
@@ -192,7 +218,6 @@ void receiveNextionData() {
       processManualCommand(c + '0');
     }
 
-    // Clear standard Nextion return codes
     if ((uint8_t)c == 0x65) {
       uint8_t buf[6];
       Serial1.readBytes(buf, 6);
