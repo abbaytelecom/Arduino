@@ -139,16 +139,18 @@ void readSensors() {
   // Conversion: (T(°F) - 32) × 5/9 = T(°C)
   float outsideTempC = (outsideTempF - 32.0) * 5.0 / 9.0;
   if (outsideTempC > 15.0) {
-    currentMode = MODE_HEAT_PUMP_COOLING;
+    setHeatPumpCooling();
   } else {
-    currentMode = MODE_HEAT_PUMP_CH;
+    setHeatPumpCH();
   }
 
   // Logic: if Solar 120-140 F -> DHW ON
   if (solarCollectorTemp >= 120.0 && solarCollectorTemp <= 140.0) {
     solarPumpRunning = true;
+    digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
   } else {
     solarPumpRunning = false;
+    digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, LOW);
   }
 
   Serial.print(F("Real Data - Outside: ")); Serial.print(outsideTempC); Serial.println(F("C"));
@@ -235,19 +237,59 @@ void processManualCommand(char cmd) {
   Serial.println(cmd);
 
   switch (cmd) {
-    case '1': currentMode = MODE_HEAT_PUMP_CH;      break;
-    case '2': currentMode = MODE_HEAT_PUMP_COOLING; break;
-    case '3': currentMode = MODE_DEFROST;           break;
-    case '4': currentMode = MODE_ERROR;             break;
+    case '1': setHeatPumpCH();      break;
+    case '2': setHeatPumpCooling(); break;
+    case '3': currentMode = MODE_DEFROST; setHeatPumpOff(); break;
+    case '4': currentMode = MODE_ERROR;   setHeatPumpOff(); break;
     case '5':
       solarPumpRunning = true;
+      digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
       currentMode = MODE_SOLAR_DHW;
       break;
     case '6':
       solarPumpRunning = false;
+      digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, LOW);
       currentMode = MODE_OFF;
+      setHeatPumpOff();
       break;
   }
 
   updateHmiDisplay();
+}
+
+// ====================== Heat Pump Control Helpers ====================== //
+
+/**
+ * Activates Central Heating mode.
+ */
+void setHeatPumpCH() {
+  currentMode = MODE_HEAT_PUMP_CH;
+  digitalWrite(HEAT_PUMP_OFF_PIN, LOW);
+  digitalWrite(HEAT_PUMP_COOLING_PIN, LOW);
+  digitalWrite(HEAT_PUMP_CH_PIN, HIGH);
+  Serial.println(F("HP Set to CH Mode"));
+}
+
+/**
+ * Activates Cooling mode.
+ */
+void setHeatPumpCooling() {
+  currentMode = MODE_HEAT_PUMP_COOLING;
+  digitalWrite(HEAT_PUMP_OFF_PIN, LOW);
+  digitalWrite(HEAT_PUMP_CH_PIN, LOW);
+  digitalWrite(HEAT_PUMP_COOLING_PIN, HIGH);
+  Serial.println(F("HP Set to Cooling Mode"));
+}
+
+/**
+ * Explicitly deactivates the heat pump using the OFF signal pin.
+ */
+void setHeatPumpOff() {
+  digitalWrite(HEAT_PUMP_CH_PIN, LOW);
+  digitalWrite(HEAT_PUMP_COOLING_PIN, LOW);
+  digitalWrite(HEAT_PUMP_OFF_PIN, HIGH);
+  if (currentMode != MODE_ERROR && currentMode != MODE_DEFROST) {
+    currentMode = MODE_OFF;
+  }
+  Serial.println(F("HP Set to OFF (Force Shutdown)"));
 }
