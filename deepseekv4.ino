@@ -55,11 +55,13 @@ namespace Config {
   constexpr float COOLING_MAX_INLET = 65.0f;
   constexpr float DHW_MAX_TEMP = 140.0f;
   constexpr float SOLAR_DELTA_T_ON = 30.0f;
+  constexpr uint32_t BOILER_MIN_RUNTIME = 600000; // 10 minutes in ms
 }
 
 // --- System State ---
 SystemMode g_currentMode = SystemMode::OFF;
 bool g_solarActive = false;
+uint32_t g_boilerStartTime = 0;
 
 struct Telemetry {
   float tankOutlet = 0.0f;
@@ -213,14 +215,27 @@ void processHeating(float deltaT) {
   digitalWrite(PIN_CIRC_2, HIGH);
 
   bool hpOk = (g_data.ambient >= Config::HP_MIN_AMBIENT && g_data.ambient > Config::HP_CRITICAL_LOW);
+  bool boilerLocked = (g_boilerStartTime > 0 && (millis() - g_boilerStartTime < Config::BOILER_MIN_RUNTIME));
 
+  // 1. Forced Boiler Takeover (High Delta T or Lock-in)
+  if (deltaT >= Config::DELTA_T_HEATING_ON || boilerLocked) {
+    if (g_boilerStartTime == 0) g_boilerStartTime = millis();
+
+    digitalWrite(PIN_HP_CH, LOW);
+    digitalWrite(PIN_HP_COOL, LOW);
+    digitalWrite(PIN_BOILER, HIGH);
+    g_currentMode = SystemMode::BOILER_HEATING;
+    return;
+  }
+
+  // Reset lock if we are below threshold and dwell time expired
+  if (deltaT <= Config::DELTA_T_HEATING_OFF) {
+    g_boilerStartTime = 0;
+  }
+
+  // 2. Normal Priority Logic (HP First)
   if (hpOk && g_currentMode != SystemMode::ERROR) {
-    if (deltaT >= Config::DELTA_T_HEATING_ON) {
-      g_currentMode = SystemMode::HP_HEATING;
-      digitalWrite(PIN_HP_COOL, LOW);
-      digitalWrite(PIN_HP_CH, HIGH);
-      digitalWrite(PIN_BOILER, HIGH);
-    } else if (g_data.tankOutlet < Config::HEATING_MIN_OUTLET) {
+    if (g_data.tankOutlet < Config::HEATING_MIN_OUTLET) {
       g_currentMode = SystemMode::HP_HEATING;
       digitalWrite(PIN_HP_COOL, LOW);
       digitalWrite(PIN_HP_CH, HIGH);
@@ -231,9 +246,9 @@ void processHeating(float deltaT) {
       g_currentMode = SystemMode::OFF;
     }
   } else {
-    // Boiler Backup
+    // Boiler Backup (Hardware Fail or Critical Cold)
     digitalWrite(PIN_HP_CH, LOW);
-    if (deltaT >= Config::DELTA_T_HEATING_ON || g_data.tankOutlet < Config::HEATING_MIN_OUTLET) {
+    if (g_data.tankOutlet < Config::HEATING_MIN_OUTLET) {
       digitalWrite(PIN_BOILER, HIGH);
       if (g_currentMode != SystemMode::ERROR) g_currentMode = SystemMode::BOILER_HEATING;
     } else {
@@ -301,13 +316,19 @@ void sendHmiTxt(const char* name, const char* txt) {
 }
 
 void refreshHmiDisplay() {
-  sendHmiNum("n0", (int)g_data.tankInlet);
-  sendHmiNum("n1", (int)g_data.tankOutlet);
-  sendHmiNum("n2", (int)g_data.dhwTank);
-  sendHmiNum("n3", (int)g_data.ambient);
-  sendHmiNum("n4", (int)g_data.solarCollector);
-  sendHmiNum("n5", (int)g_data.humidity);
+  // 1. Update Numeric Fields (n0 - n5) using optimized iteration
+  const float* telemetryRefs[] = {
+    &g_data.tankInlet, &g_data.tankOutlet, &g_data.dhwTank,
+    &g_data.ambient, &g_data.solarCollector, &g_data.humidity
+  };
 
+  char cmdBuffer[3] = {'n', '0', '\0'};
+  for (uint8_t i = 0; i < 6; i++) {
+    cmdBuffer[1] = '0' + i;
+    sendHmiNum(cmdBuffer, (int)(*telemetryRefs[i]));
+  }
+
+  // 2. Update Status Text Fields (t0 - t3)
   const char* statusStr = "SYSTEM OFF";
   switch (g_currentMode) {
     case SystemMode::HP_COOLING:     statusStr = "HP COOLING"; break;
@@ -316,6 +337,7 @@ void refreshHmiDisplay() {
     case SystemMode::DEFROST:        statusStr = "DEFROSTING"; break;
     case SystemMode::ERROR:          statusStr = "SYS ERROR";  break;
   }
+
   sendHmiTxt("t0", statusStr);
   sendHmiTxt("t1", (digitalRead(PIN_BOILER) == HIGH) ? "BOILER ACT" : "BOILER OFF");
   sendHmiTxt("t2", g_solarActive ? "SOLAR ON" : "SOLAR OFF");

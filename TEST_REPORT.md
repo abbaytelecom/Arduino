@@ -14,16 +14,18 @@ This report documents the verification of the control logic within `deepseekv4.i
     *   **Boiler (Pin 6):** `HIGH`
     *   **System Mode:** `BOILER_HEATING`
 
-## Test Scenario 2: Cold
+## Test Scenario 2: Cold (Boiler Takeover)
 *   **Input Conditions:** Ambient = `30.0°F`, Delta T = `30.0°F` (Inlet 70, Outlet 100).
 *   **Logic Path:**
     1.  Ambient is below `Config::HEATING_THRESHOLD` (65°F).
     2.  Ambient is within Heat Pump operating range (5°F to 65°F). `hpOk` is TRUE.
     3.  Delta T (30°F) exceeds `Config::DELTA_T_HEATING_ON` (25°F).
+    4.  System triggers **Boiler Takeover**: Heat Pump is deactivated to prioritize Boiler efficiency and starts a 10-minute lock timer.
 *   **Expected Results:**
-    *   **HP Central Heating (Pin 3):** `HIGH`
+    *   **HP Central Heating (Pin 3):** `LOW` (Forced Off)
     *   **Boiler (Pin 6):** `HIGH`
-    *   **System Mode:** `HP_HEATING`
+    *   **System Mode:** `BOILER_HEATING`
+    *   **Anti-Short Cycle:** System will remain in this state for at least 10 minutes even if Delta T drops.
 
 ## Test Scenario 3: Normal (Deadband)
 *   **Input Conditions:** Ambient = `68.0°F`.

@@ -17,6 +17,8 @@
   - System state should be `MODE_OFF`.
 
 ## Operational Logic Updates
-- Below 64°F: Heating Mode (Heat Pump and Boiler as needed, Circulators ON).
+- Below 65°F: Heating Mode.
+- Boiler Takeover: When Ambient is within Heat Pump operating range and heat pump struggles to keep up with the Delta T (Delta T >= 25.0°F), then the boiler must take over completely (Heat Pump OFF, Boiler ON).
+- Anti-Short Cycle: Avoid short cycle between turn over of heat pump and boiler (Implement a minimum dwell time of 10 minutes).
 - Above 70°F: Cooling Mode (Heat Pump Cooling, Circulators ON).
 - Solar DHW logic remains (120-140°F).

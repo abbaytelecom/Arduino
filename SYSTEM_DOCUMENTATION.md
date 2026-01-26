@@ -40,8 +40,10 @@ The firmware implements a sophisticated state-machine approach:
 
 ### Heating Mode (`processHeating`)
 - Monitors Delta T (Outlet - Inlet).
-- Prioritizes Heat Pump if ambient conditions are favorable.
-- Activates Boiler as a primary source during extreme cold or if the Heat Pump fails.
+- **HP Priority:** Prioritizes Heat Pump if ambient conditions are favorable (> 5.0°F).
+- **Boiler Takeover:** If the Heat Pump struggles (Delta T >= 25.0°F), the system triggers a **complete takeover**: Heat Pump is forced OFF and the Boiler is forced ON.
+- **Anti-Short Cycle:** Once a Boiler Takeover is triggered, the system enforces a **10-minute minimum runtime** for the Boiler before allow any transitions back to Heat Pump mode.
+- **Backup Mode:** Activates Boiler as the primary source during extreme cold (< -4.0°F) or if a Heat Pump hardware failure is detected.
 - Maintains minimum outlet temperature of `100.0°F`.
 
 ### Cooling Mode (`processCooling`)
@@ -61,7 +63,7 @@ The system prioritizes equipment longevity and home safety:
 - **Safe Shutdown:** A dedicated `performSafeShutdown()` routine forces all high-power outputs to `LOW` in the event of a critical error.
 
 ## 6. HMI Interface Protocol
-The Nextion display is updated every 3 seconds with the following mapping:
+The Nextion display is updated every 3 seconds. The firmware utilizes an **optimized iteration routine** to update telemetry fields, reducing serial overhead.
 
 ### Telemetry (Numeric)
 - `n0`: Tank Inlet Temp
