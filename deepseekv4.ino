@@ -42,8 +42,6 @@ enum SystemMode {
 // Global variables
 SystemMode currentMode = MODE_OFF;
 bool solarPumpRunning = false;
-bool manualOverride = false; // Prevents sensor logic from stomping on manual tests
-
 // Sensor Data
 float tankOutletTemp = 0;
 float tankInletTemp = 0;
@@ -86,8 +84,6 @@ void setup() {
 
 // ====================== Main Loop ====================== //
 void loop() {
-  receiveNextionData();
-
   static unsigned long lastUpdate = 0;
   if (millis() - lastUpdate > 3000) {
     readSensors();
@@ -107,41 +103,43 @@ void readSensors() {
   outsideTempF = sensors.getTempFByIndex(2);
   dhwTankTemp = sensors.getTempFByIndex(3);
   solarCollectorTemp = sensors.getTempFByIndex(4);
-  utilityHumidity = dht.readHumidity();
 
-  // Only apply automatic logic if not in manual override
-  if (!manualOverride) {
-    // Mode Logic based on Outside Temp
-    if (outsideTempF != -196.6) { // Check for sensor presence
-      if (outsideTempF >= 64.0 && outsideTempF <= 70.0) {
-        // OFF Mode range
-        setHeatPumpOff();
-        digitalWrite(BOILER_PIN, LOW);
-        digitalWrite(FIRST_FLOOR_CIRC_PIN, LOW);
-        digitalWrite(SECOND_FLOOR_CIRC_PIN, LOW);
-        currentMode = MODE_OFF;
-      } else if (outsideTempF > 70.0) {
-        // Cooling Mode
-        setHeatPumpCooling();
-        digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
-        digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
-      } else {
-        // Heating Mode (< 64.0)
-        setHeatPumpCH();
-        digitalWrite(BOILER_PIN, HIGH); // Boiler ON for heating support
-        digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
-        digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
-      }
-    }
+  float h = dht.readHumidity();
+  if (!isnan(h)) {
+    utilityHumidity = h;
+  }
 
-    // Solar logic based on 120-140F range
-    if (solarCollectorTemp >= 120.0 && solarCollectorTemp <= 140.0) {
-      solarPumpRunning = true;
-      digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
+  // Mode Logic based on Outside Temp
+  if (outsideTempF != -196.6) { // Check for sensor presence
+    if (outsideTempF >= 64.0 && outsideTempF <= 70.0) {
+      // OFF Mode range
+      setHeatPumpOff();
+      digitalWrite(BOILER_PIN, LOW);
+      digitalWrite(FIRST_FLOOR_CIRC_PIN, LOW);
+      digitalWrite(SECOND_FLOOR_CIRC_PIN, LOW);
+      currentMode = MODE_OFF;
+    } else if (outsideTempF > 70.0) {
+      // Cooling Mode
+      setHeatPumpCooling();
+        digitalWrite(BOILER_PIN, LOW); // Explicitly ensure boiler is off in cooling
+      digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
+      digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
     } else {
-      solarPumpRunning = false;
-      digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, LOW);
+      // Heating Mode (< 64.0)
+      setHeatPumpCH();
+      digitalWrite(BOILER_PIN, HIGH); // Boiler ON for heating support
+      digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
+      digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
     }
+  }
+
+  // Solar logic based on 120-140F range
+  if (solarCollectorTemp >= 120.0 && solarCollectorTemp <= 140.0) {
+    solarPumpRunning = true;
+    digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
+  } else {
+    solarPumpRunning = false;
+    digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, LOW);
   }
 }
 
@@ -206,64 +204,11 @@ void updateHmiDisplay() {
 
   // Status t2: DHW
   updateNextionText("t2", solarPumpRunning ? "DHW ON" : "DHW OFF");
-}
 
-// ====================== Input Handling ====================== //
-
-void receiveNextionData() {
-  while (Serial1.available()) {
-    char c = Serial1.read();
-    // Commands '0' to '6' (0 is Auto mode)
-    if ((c >= '0' && c <= '6') || ((uint8_t)c >= 0 && (uint8_t)c <= 6)) {
-      char cmd = (c >= '0' && c <= '6') ? c : (c + '0');
-      processManualCommand(cmd);
-    }
-    if ((uint8_t)c == 0x65) { // Flush touch events
-      uint8_t buf[6]; Serial1.readBytes(buf, 6);
-    }
-  }
-}
-
-void processManualCommand(char cmd) {
-  if (cmd == '0') {
-    manualOverride = false;
-    Serial.println(F("Auto Mode Restored"));
+  // Status t3: DHW Overheat
+  if (dhwTankTemp > 160.0) {
+    updateNextionText("t3", "DHWTank Overheating");
   } else {
-    manualOverride = true;
-    Serial.print(F("Manual Override Activated: ")); Serial.println(cmd);
+    updateNextionText("t3", "DHW Normal");
   }
-
-  switch (cmd) {
-    case '1':
-      setHeatPumpCH();
-      digitalWrite(BOILER_PIN, HIGH);
-      digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
-      digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
-      break;
-    case '2':
-      setHeatPumpCooling();
-      digitalWrite(BOILER_PIN, LOW);
-      digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
-      digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
-      break;
-    case '3':
-      currentMode = MODE_DEFROST;
-      setHeatPumpOff();
-      digitalWrite(BOILER_PIN, LOW);
-      break;
-    case '4':
-      currentMode = MODE_ERROR;
-      setHeatPumpOff();
-      digitalWrite(BOILER_PIN, LOW);
-      break;
-    case '5':
-      solarPumpRunning = true;
-      digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
-      break;
-    case '6':
-      solarPumpRunning = false;
-      digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, LOW);
-      break;
-  }
-  updateHmiDisplay();
 }
