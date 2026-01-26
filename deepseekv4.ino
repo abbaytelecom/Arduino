@@ -9,7 +9,9 @@
  * Hardware Connection:
  * - Nextion TX -> GIGA R1 Pin 0 (RX1)
  * - Nextion RX -> GIGA R1 Pin 1 (TX1)
- * - USB -> Debug Serial
+ * - Heat Pump: Pin 3 (CH), Pin 4 (Cooling) -> Two-wire Logic
+ * - Boiler: Pin 6
+ * - Solar Pump: Pin 14
  */
 
 // Pin definitions
@@ -17,7 +19,6 @@ const int ONE_WIRE_BUS = 2;
 const int DHT_PIN = 10;
 const int HEAT_PUMP_CH_PIN = 3;
 const int HEAT_PUMP_COOLING_PIN = 4;
-const int HEAT_PUMP_OFF_PIN = 5;
 const int BOILER_PIN = 6;
 const int CIRCULATOR_PUMP_PIN = 7;
 const int TWO_WAY_VALVE_PIN = 8;
@@ -40,10 +41,9 @@ enum SystemMode {
 };
 
 // Global variables
-SystemMode currentMode = MODE_HEAT_PUMP_CH;
-bool isHeatPumpFailed = false;
-bool isSensorError = false;
+SystemMode currentMode = MODE_OFF;
 bool solarPumpRunning = false;
+bool manualOverride = false; // Prevents sensor logic from stomping on manual tests
 
 // Sensor Data
 float tankOutletTemp = 0;
@@ -52,8 +52,6 @@ float outsideTempF = 0;
 float dhwTankTemp = 0;
 float solarCollectorTemp = 0;
 float utilityHumidity = 0;
-float utilityTempF = 0;
-float dewPointF = 0;
 
 // Temperature sensor addresses
 DeviceAddress tankOutlet = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0A };
@@ -81,7 +79,6 @@ void setup() {
   // Initialize pins
   pinMode(HEAT_PUMP_CH_PIN, OUTPUT);
   pinMode(HEAT_PUMP_COOLING_PIN, OUTPUT);
-  pinMode(HEAT_PUMP_OFF_PIN, OUTPUT);
   pinMode(BOILER_PIN, OUTPUT);
   pinMode(CIRCULATOR_PUMP_PIN, OUTPUT);
   pinMode(TWO_WAY_VALVE_PIN, OUTPUT);
@@ -91,15 +88,14 @@ void setup() {
   pinMode(DEFROST_INPUT_PIN, INPUT_PULLUP);
   pinMode(HEAT_PUMP_FAIL_PIN, INPUT_PULLUP);
 
-  Serial.println(F("HVAC Controller with Nextion Initialized (GIGA R1)"));
+  setHeatPumpOff(); // Ensure initial state is OFF
+  Serial.println(F("Integrated HVAC Controller Initialized (GIGA R1)"));
 }
 
 // ====================== Main Loop ====================== //
 void loop() {
-  // Handle HMI input
   receiveNextionData();
 
-  // Periodic Hardware Update
   static unsigned long lastUpdate = 0;
   if (millis() - lastUpdate > 3000) {
     readSensors();
@@ -108,12 +104,8 @@ void loop() {
   }
 }
 
-// ====================== Sensor Acquisition ====================== //
+// ====================== Sensor Acquisition & Logic ====================== //
 
-/**
- * Acquires data from physical DS18B20 and DHT11 sensors.
- * Replaces random simulation.
- */
 void readSensors() {
   sensors.requestTemperatures();
   tankOutletTemp = sensors.getTempF(tankOutlet);
@@ -121,49 +113,67 @@ void readSensors() {
   outsideTempF = sensors.getTempF(outsideTemp);
   dhwTankTemp = sensors.getTempF(dhwTankSensor);
   solarCollectorTemp = sensors.getTempF(solarCollectorSensor);
-
-  // Read DHT sensor
   utilityHumidity = dht.readHumidity();
-  utilityTempF = dht.readTemperature(true);
 
-  // Check for basic sensor disconnects
-  if (outsideTempF == -196.6 || tankOutletTemp == -196.6) {
-    isSensorError = true;
-    currentMode = MODE_ERROR;
-    return;
-  } else {
-    isSensorError = false;
+  // Only apply automatic logic if not in manual override
+  if (!manualOverride) {
+    // Mode Logic based on Outside Temp (15C threshold)
+    float outsideTempC = (outsideTempF - 32.0) * 5.0 / 9.0;
+    if (outsideTempF != -196.6) { // Check for sensor presence
+      if (outsideTempC > 15.0) {
+        setHeatPumpCooling();
+      } else {
+        setHeatPumpCH();
+      }
+    }
+
+    // Solar logic based on 120-140F range
+    if (solarCollectorTemp >= 120.0 && solarCollectorTemp <= 140.0) {
+      solarPumpRunning = true;
+      digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
+    } else {
+      solarPumpRunning = false;
+      digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, LOW);
+    }
   }
+}
 
-  // Logic: if OutsideTemp > 15 C (59 F) -> HeatPumpCooling, else HeatPumpHeating
-  // Conversion: (T(°F) - 32) × 5/9 = T(°C)
-  float outsideTempC = (outsideTempF - 32.0) * 5.0 / 9.0;
-  if (outsideTempC > 15.0) {
-    setHeatPumpCooling();
-  } else {
-    setHeatPumpCH();
+// ====================== Heat Pump Control Helpers ====================== //
+
+void setHeatPumpCH() {
+  currentMode = MODE_HEAT_PUMP_CH;
+  digitalWrite(HEAT_PUMP_COOLING_PIN, LOW);
+  digitalWrite(HEAT_PUMP_CH_PIN, HIGH);
+}
+
+void setHeatPumpCooling() {
+  currentMode = MODE_HEAT_PUMP_COOLING;
+  digitalWrite(HEAT_PUMP_CH_PIN, LOW);
+  digitalWrite(HEAT_PUMP_COOLING_PIN, HIGH);
+}
+
+void setHeatPumpOff() {
+  digitalWrite(HEAT_PUMP_CH_PIN, LOW);
+  digitalWrite(HEAT_PUMP_COOLING_PIN, LOW);
+  if (currentMode != MODE_ERROR && currentMode != MODE_DEFROST) {
+    currentMode = MODE_OFF;
   }
-
-  // Logic: if Solar 120-140 F -> DHW ON
-  if (solarCollectorTemp >= 120.0 && solarCollectorTemp <= 140.0) {
-    solarPumpRunning = true;
-    digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
-  } else {
-    solarPumpRunning = false;
-    digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, LOW);
-  }
-
-  Serial.print(F("Real Data - Outside: ")); Serial.print(outsideTempC); Serial.println(F("C"));
 }
 
 // ====================== HMI Communication ====================== //
 
-/**
- * Updates Nextion components:
- * n0-n5 for sensors, t0-t2 for status.
- */
+void updateNextionText(String component, String value) {
+  Serial1.print(component + ".txt=\"" + value + "\"");
+  Serial1.write(nextionTerminator, 3);
+}
+
+void updateNextionNumber(String component, int value) {
+  Serial1.print(component + ".val=" + String(value));
+  Serial1.write(nextionTerminator, 3);
+}
+
 void updateHmiDisplay() {
-  // Numeric Readings
+  // Telemetry n0-n5
   updateNextionNumber("n0", (int)tankInletTemp);
   updateNextionNumber("n1", (int)tankOutletTemp);
   updateNextionNumber("n2", (int)dhwTankTemp);
@@ -171,7 +181,7 @@ void updateHmiDisplay() {
   updateNextionNumber("n4", (int)solarCollectorTemp);
   updateNextionNumber("n5", (int)utilityHumidity);
 
-  // t0: Heat pump mode status
+  // Status t0: Heat Pump
   switch (currentMode) {
     case MODE_HEAT_PUMP_COOLING: updateNextionText("t0", "HeatPumpCooling"); break;
     case MODE_HEAT_PUMP_CH:      updateNextionText("t0", "HeatPumpHeating"); break;
@@ -180,116 +190,49 @@ void updateHmiDisplay() {
     default:                     updateNextionText("t0", "HP ACTIVE");        break;
   }
 
-  // t1: Boiler status
-  if (currentMode == MODE_BOILER_CH || digitalRead(BOILER_PIN) == HIGH) {
+  // Status t1: Boiler
+  if (digitalRead(BOILER_PIN) == HIGH) {
     updateNextionText("t1", "Boiler Heating");
   } else {
     updateNextionText("t1", "Boiler OFF");
   }
 
-  // t2: DHW status
-  if (solarPumpRunning || currentMode == MODE_SOLAR_DHW || currentMode == MODE_HEAT_PUMP_DHW) {
-    updateNextionText("t2", "DHW ON");
-  } else {
-    updateNextionText("t2", "DHW OFF");
-  }
-
-  Serial.println(F("Nextion Display Updated"));
+  // Status t2: DHW
+  updateNextionText("t2", solarPumpRunning ? "DHW ON" : "DHW OFF");
 }
 
-void sendNextionCommand(String cmd) {
-  Serial1.print(cmd);
-  Serial1.write(nextionTerminator, 3);
-}
-
-void updateNextionText(String component, String value) {
-  String cmd = component + ".txt=\"" + value + "\"";
-  sendNextionCommand(cmd);
-}
-
-void updateNextionNumber(String component, int value) {
-  String cmd = component + ".val=" + String(value);
-  sendNextionCommand(cmd);
-}
-
-// ====================== HMI Input Handling ====================== //
+// ====================== Input Handling ====================== //
 
 void receiveNextionData() {
   while (Serial1.available()) {
     char c = Serial1.read();
-
-    if (c >= '1' && c <= '6') {
-      processManualCommand(c);
+    if ((c >= '1' && c <= '6') || ((uint8_t)c >= 1 && (uint8_t)c <= 6)) {
+      char cmd = (c >= '1' && c <= '6') ? c : (c + '0');
+      processManualCommand(cmd);
     }
-    else if ((uint8_t)c >= 1 && (uint8_t)c <= 6) {
-      processManualCommand(c + '0');
-    }
-
-    if ((uint8_t)c == 0x65) {
-      uint8_t buf[6];
-      Serial1.readBytes(buf, 6);
+    if ((uint8_t)c == 0x65) { // Flush touch events
+      uint8_t buf[6]; Serial1.readBytes(buf, 6);
     }
   }
 }
 
 void processManualCommand(char cmd) {
-  Serial.print(F("Manual Override: "));
-  Serial.println(cmd);
+  manualOverride = true; // Engage manual override when HMI command received
+  Serial.print(F("Manual Override Activated: ")); Serial.println(cmd);
 
   switch (cmd) {
-    case '1': setHeatPumpCH();      break;
+    case '1': setHeatPumpCH(); break;
     case '2': setHeatPumpCooling(); break;
     case '3': currentMode = MODE_DEFROST; setHeatPumpOff(); break;
     case '4': currentMode = MODE_ERROR;   setHeatPumpOff(); break;
     case '5':
       solarPumpRunning = true;
       digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
-      currentMode = MODE_SOLAR_DHW;
       break;
     case '6':
       solarPumpRunning = false;
       digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, LOW);
-      currentMode = MODE_OFF;
-      setHeatPumpOff();
       break;
   }
-
   updateHmiDisplay();
-}
-
-// ====================== Heat Pump Control Helpers ====================== //
-
-/**
- * Activates Central Heating mode.
- */
-void setHeatPumpCH() {
-  currentMode = MODE_HEAT_PUMP_CH;
-  digitalWrite(HEAT_PUMP_OFF_PIN, LOW);
-  digitalWrite(HEAT_PUMP_COOLING_PIN, LOW);
-  digitalWrite(HEAT_PUMP_CH_PIN, HIGH);
-  Serial.println(F("HP Set to CH Mode"));
-}
-
-/**
- * Activates Cooling mode.
- */
-void setHeatPumpCooling() {
-  currentMode = MODE_HEAT_PUMP_COOLING;
-  digitalWrite(HEAT_PUMP_OFF_PIN, LOW);
-  digitalWrite(HEAT_PUMP_CH_PIN, LOW);
-  digitalWrite(HEAT_PUMP_COOLING_PIN, HIGH);
-  Serial.println(F("HP Set to Cooling Mode"));
-}
-
-/**
- * Explicitly deactivates the heat pump using the OFF signal pin.
- */
-void setHeatPumpOff() {
-  digitalWrite(HEAT_PUMP_CH_PIN, LOW);
-  digitalWrite(HEAT_PUMP_COOLING_PIN, LOW);
-  digitalWrite(HEAT_PUMP_OFF_PIN, HIGH);
-  if (currentMode != MODE_ERROR && currentMode != MODE_DEFROST) {
-    currentMode = MODE_OFF;
-  }
-  Serial.println(F("HP Set to OFF (Force Shutdown)"));
 }
