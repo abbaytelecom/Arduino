@@ -39,6 +39,23 @@ enum SystemMode {
   MODE_ERROR
 };
 
+// Temperature thresholds
+const float OUTSIDE_HEATING_THRESHOLD = 65.0;
+const float HEAT_PUMP_MIN_TEMP = 5.0;
+const float HEAT_PUMP_OFF_TEMP = -4.0;
+const float DELTA_T_HEATING_THRESHOLD = 20.0;
+const float DELTA_T_COOLING_THRESHOLD = 5.0;
+const float DELTA_T_HEATING_ASSIST = 25.0;
+const float DELTA_T_COOLING_ON = 10.0;
+const float DELTA_T_HEATING_ON = 25.0;
+const float DEW_POINT_BUFFER = 2.0;
+const float HEATING_MAX_OUTLET_TEMP = 120.0;
+const float HEATING_MIN_OUTLET_TEMP = 100.0;
+const float COOLING_MAX_INLET_TEMP = 65.0;
+const float COOLING_MIN_INLET_TEMP = 42.0;
+const float DHW_OVERHEAT_TEMP = 140.0;
+const float SOLAR_DHW_DELTA_T = 30.0;
+
 // Global variables
 SystemMode currentMode = MODE_OFF;
 bool solarPumpRunning = false;
@@ -49,6 +66,7 @@ float outsideTempF = 0;
 float dhwTankTemp = 0;
 float solarCollectorTemp = 0;
 float utilityHumidity = 0;
+float dewPointF = 0;
 
 // OneWire and DHT setup
 OneWire oneWire(ONE_WIRE_BUS);
@@ -84,6 +102,8 @@ void setup() {
 
 // ====================== Main Loop ====================== //
 void loop() {
+  receiveNextionData();
+
   static unsigned long lastUpdate = 0;
   if (millis() - lastUpdate > 3000) {
     readSensors();
@@ -105,13 +125,52 @@ void readSensors() {
   solarCollectorTemp = sensors.getTempFByIndex(4);
 
   float h = dht.readHumidity();
-  if (!isnan(h)) {
+  float t = dht.readTemperature(true);
+  if (!isnan(h) && !isnan(t)) {
     utilityHumidity = h;
+    dewPointF = calculateDewPoint(t, h);
+  }
+
+  float deltaT = calculateDeltaT(tankOutletTemp, tankInletTemp);
+
+  // Safety checks
+  if (digitalRead(HEAT_PUMP_FAIL_PIN) == LOW) {
+    currentMode = MODE_ERROR;
+  } else if (digitalRead(DEFROST_INPUT_PIN) == LOW) {
+    currentMode = MODE_DEFROST;
   }
 
   // Mode Logic based on Outside Temp
   if (outsideTempF != -196.6) { // Check for sensor presence
-    if (outsideTempF >= 64.0 && outsideTempF <= 70.0) {
+    if (outsideTempF < OUTSIDE_HEATING_THRESHOLD) {
+      // Heating Mode Season
+      digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
+      digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
+
+      bool hpAllowed = (outsideTempF >= HEAT_PUMP_MIN_TEMP && outsideTempF > HEAT_PUMP_OFF_TEMP);
+
+      if (hpAllowed && currentMode != MODE_ERROR) {
+        if (deltaT >= DELTA_T_HEATING_ON) {
+          setHeatPumpCH();
+          digitalWrite(BOILER_PIN, HIGH); // Boiler ON to assist
+        } else if (tankOutletTemp < HEATING_MIN_OUTLET_TEMP) {
+          setHeatPumpCH();
+          digitalWrite(BOILER_PIN, LOW);
+        } else if (deltaT <= DELTA_T_HEATING_THRESHOLD) {
+          setHeatPumpOff();
+          digitalWrite(BOILER_PIN, LOW);
+        }
+      } else {
+        // Too cold for Heat Pump or HP Failure - Use Boiler as fallback
+        setHeatPumpOff();
+        if (deltaT >= DELTA_T_HEATING_ON || tankOutletTemp < HEATING_MIN_OUTLET_TEMP) {
+          digitalWrite(BOILER_PIN, HIGH);
+          if (currentMode != MODE_ERROR) currentMode = MODE_BOILER_CH;
+        } else {
+          digitalWrite(BOILER_PIN, LOW);
+        }
+      }
+    } else if (outsideTempF >= 65.0 && outsideTempF <= 70.0) {
       // OFF Mode range
       setHeatPumpOff();
       digitalWrite(BOILER_PIN, LOW);
@@ -119,22 +178,29 @@ void readSensors() {
       digitalWrite(SECOND_FLOOR_CIRC_PIN, LOW);
       currentMode = MODE_OFF;
     } else if (outsideTempF > 70.0) {
-      // Cooling Mode
-      setHeatPumpCooling();
-        digitalWrite(BOILER_PIN, LOW); // Explicitly ensure boiler is off in cooling
+      // Cooling Mode Season
       digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
       digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
-    } else {
-      // Heating Mode (< 64.0)
-      setHeatPumpCH();
-      digitalWrite(BOILER_PIN, HIGH); // Boiler ON for heating support
-      digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
-      digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
+      digitalWrite(BOILER_PIN, LOW);
+
+      if (tankInletTemp >= COOLING_MIN_INLET_TEMP && tankInletTemp <= COOLING_MAX_INLET_TEMP) {
+        if (tankOutletTemp >= (dewPointF + DEW_POINT_BUFFER)) {
+          if (deltaT >= DELTA_T_COOLING_ON) {
+            setHeatPumpCooling();
+          } else if (deltaT <= DELTA_T_COOLING_THRESHOLD) {
+            setHeatPumpOff();
+          }
+        } else {
+          setHeatPumpOff();
+        }
+      } else {
+        setHeatPumpOff();
+      }
     }
   }
 
-  // Solar logic based on 120-140F range
-  if (solarCollectorTemp >= 120.0 && solarCollectorTemp <= 140.0) {
+  // Solar logic based on Delta T and tank max
+  if ((solarCollectorTemp - dhwTankTemp) >= SOLAR_DHW_DELTA_T && dhwTankTemp < DHW_OVERHEAT_TEMP) {
     solarPumpRunning = true;
     digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
   } else {
@@ -163,6 +229,21 @@ void setHeatPumpOff() {
   if (currentMode != MODE_ERROR && currentMode != MODE_DEFROST) {
     currentMode = MODE_OFF;
   }
+}
+
+// ====================== Utility Functions ====================== //
+
+float calculateDeltaT(float outlet, float inlet) {
+  return abs(outlet - inlet);
+}
+
+float calculateDewPoint(float tempF, float humidity) {
+  float tempC = (tempF - 32.0) * 5.0 / 9.0;
+  const float a = 17.625;
+  const float b = 243.04;
+  float alpha = log(humidity / 100.0) + (a * tempC) / (b + tempC);
+  float dewPointC = (b * alpha) / (a - alpha);
+  return (dewPointC * 9.0 / 5.0) + 32.0;
 }
 
 // ====================== HMI Communication ====================== //
@@ -206,9 +287,48 @@ void updateHmiDisplay() {
   updateNextionText("t2", solarPumpRunning ? "DHW ON" : "DHW OFF");
 
   // Status t3: DHW Overheat
-  if (dhwTankTemp > 160.0) {
+  if (dhwTankTemp >= DHW_OVERHEAT_TEMP) {
     updateNextionText("t3", "DHWTank Overheating");
   } else {
     updateNextionText("t3", "DHW Normal");
+  }
+}
+
+// ====================== Input Handling ====================== //
+
+void receiveNextionData() {
+  while (Serial1.available()) {
+    uint8_t c = Serial1.read();
+
+    // Simple command parser for numeric inputs
+    if (c >= '0' && c <= '9') {
+      processCommand(c);
+    }
+
+    // Handle Nextion touch events (0x65 ...)
+    if (c == 0x65) {
+      uint8_t buf[6];
+      Serial1.readBytes(buf, 6);
+    }
+  }
+}
+
+void processCommand(uint8_t cmd) {
+  Serial.print(F("Nextion Command Received: "));
+  Serial.println((char)cmd);
+
+  switch (cmd) {
+    case '0':
+      Serial.println(F("Command: System Reset/Normal"));
+      break;
+    case '1':
+      Serial.println(F("Command: Force Heating Mode"));
+      break;
+    case '2':
+      Serial.println(F("Command: Force Cooling Mode"));
+      break;
+    default:
+      Serial.println(F("Command: Unknown"));
+      break;
   }
 }
