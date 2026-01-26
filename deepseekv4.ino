@@ -4,414 +4,357 @@
 
 /**
  * @file deepseekv4.ino
- * @brief Smart HVAC & Solar Controller (Arduino GIGA R1)
+ * @brief Professional HVAC & Solar Controller (Arduino GIGA R1)
  *
+ * Manages Heat Pump, Boiler, and Solar DHW with Nextion HMI interface.
  * Hardware Connection:
- * - Nextion TX -> GIGA R1 Pin 0 (RX1)
- * - Nextion RX -> GIGA R1 Pin 1 (TX1)
- * - Heat Pump: Pin 3 (CH), Pin 4 (Cooling)
- * - Boiler: Pin 6
- * - Solar Pump: Pin 14
+ * - Nextion TX -> GIGA RX1 (Pin 0)
+ * - Nextion RX -> GIGA TX1 (Pin 1)
  */
 
-// --- Pin Definitions ---
-constexpr uint8_t ONE_WIRE_BUS = 2;
-constexpr uint8_t DHT_PIN = 10;
-constexpr uint8_t HEAT_PUMP_CH_PIN = 3;
-constexpr uint8_t HEAT_PUMP_COOLING_PIN = 4;
-constexpr uint8_t BOILER_PIN = 6;
-constexpr uint8_t FIRST_FLOOR_CIRC_PIN = 7;
-constexpr uint8_t SECOND_FLOOR_CIRC_PIN = 8;
-constexpr uint8_t DEFROST_INPUT_PIN = 9;
-constexpr uint8_t HEAT_PUMP_FAIL_PIN = 11;
-constexpr uint8_t SOLAR_CIRCULATOR_PUMP_PIN = 14;
-constexpr uint8_t OVERHEAT_VALVE_PIN = 15;
+// --- Pin Assignments ---
+constexpr uint8_t PIN_ONE_WIRE_BUS = 2;
+constexpr uint8_t PIN_DHT = 10;
+constexpr uint8_t PIN_HP_CH = 3;
+constexpr uint8_t PIN_HP_COOL = 4;
+constexpr uint8_t PIN_BOILER = 6;
+constexpr uint8_t PIN_CIRC_1 = 7;
+constexpr uint8_t PIN_CIRC_2 = 8;
+constexpr uint8_t PIN_DEFROST = 9;
+constexpr uint8_t PIN_HP_FAIL = 11;
+constexpr uint8_t PIN_SOLAR_PUMP = 14;
+constexpr uint8_t PIN_OVERHEAT_VALVE = 15;
 
 /**
  * @brief System operation modes
  */
-enum SystemMode {
-  MODE_OFF,
-  MODE_HEAT_PUMP_COOLING,
-  MODE_HEAT_PUMP_CH,
-  MODE_BOILER_CH,
-  MODE_SOLAR_DHW,
-  MODE_DEFROST,
-  MODE_DHW_OVERHEAT,
-  MODE_ERROR
+enum class SystemMode : uint8_t {
+  OFF,
+  HP_COOLING,
+  HP_HEATING,
+  BOILER_HEATING,
+  SOLAR_DHW,
+  DEFROST,
+  DHW_OVERHEAT,
+  ERROR
 };
 
-// --- Temperature Thresholds (°F) ---
-constexpr float OUTSIDE_HEATING_THRESHOLD = 65.0f;
-constexpr float OUTSIDE_COOLING_THRESHOLD = 70.0f;
-constexpr float HEAT_PUMP_MIN_TEMP = 5.0f;
-constexpr float HEAT_PUMP_OFF_TEMP = -4.0f;
-constexpr float DELTA_T_HEATING_THRESHOLD = 20.0f;
-constexpr float DELTA_T_COOLING_THRESHOLD = 5.0f;
-constexpr float DELTA_T_HEATING_ASSIST = 25.0f;
-constexpr float DELTA_T_COOLING_ON = 10.0f;
-constexpr float DELTA_T_HEATING_ON = 25.0f;
-constexpr float DEW_POINT_BUFFER = 2.0f;
-constexpr float HEATING_MAX_OUTLET_TEMP = 120.0f;
-constexpr float HEATING_MIN_OUTLET_TEMP = 100.0f;
-constexpr float COOLING_MAX_INLET_TEMP = 65.0f;
-constexpr float COOLING_MIN_INLET_TEMP = 42.0f;
-constexpr float DHW_OVERHEAT_TEMP = 140.0f;
-constexpr float SOLAR_DHW_DELTA_T = 30.0f;
+// --- Configurable Thresholds (°F) ---
+namespace Config {
+  constexpr float HEATING_THRESHOLD = 65.0f;
+  constexpr float COOLING_THRESHOLD = 70.0f;
+  constexpr float HP_MIN_AMBIENT = 5.0f;
+  constexpr float HP_CRITICAL_LOW = -4.0f;
+  constexpr float DELTA_T_HEATING_OFF = 20.0f;
+  constexpr float DELTA_T_HEATING_ON = 25.0f;
+  constexpr float DELTA_T_COOLING_OFF = 5.0f;
+  constexpr float DELTA_T_COOLING_ON = 10.0f;
+  constexpr float DEW_POINT_BUFFER = 2.0f;
+  constexpr float HEATING_MIN_OUTLET = 100.0f;
+  constexpr float COOLING_MIN_INLET = 42.0f;
+  constexpr float COOLING_MAX_INLET = 65.0f;
+  constexpr float DHW_MAX_TEMP = 140.0f;
+  constexpr float SOLAR_DELTA_T_ON = 30.0f;
+}
 
-// --- Global Variables ---
-SystemMode currentMode = MODE_OFF;
-bool solarPumpRunning = false;
+// --- System State ---
+SystemMode g_currentMode = SystemMode::OFF;
+bool g_solarActive = false;
 
-// Telemetry Data
-float tankOutletTemp = 0.0f;
-float tankInletTemp = 0.0f;
-float outsideTempF = 0.0f;
-float dhwTankTemp = 0.0f;
-float solarCollectorTemp = 0.0f;
-float utilityHumidity = 0.0f;
-float dewPointF = 0.0f;
+struct Telemetry {
+  float tankOutlet = 0.0f;
+  float tankInlet = 0.0f;
+  float ambient = 0.0f;
+  float dhwTank = 0.0f;
+  float solarCollector = 0.0f;
+  float humidity = 0.0f;
+  float dewPoint = 0.0f;
+} g_data;
 
-// Libraries setup
-OneWire oneWire(ONE_WIRE_BUS);
-DallasTemperature sensors(&oneWire);
-DHT dht(DHT_PIN, DHT11);
+// --- Drivers ---
+OneWire g_oneWire(PIN_ONE_WIRE_BUS);
+DallasTemperature g_sensors(&g_oneWire);
+DHT g_dht(PIN_DHT, DHT11);
 
-const uint8_t NEXTION_TERMINATOR[] = { 0xFF, 0xFF, 0xFF };
+const uint8_t NEXTION_END[] = { 0xFF, 0xFF, 0xFF };
+
+// =============================================================================
+// Helper: Error Handling
+// =============================================================================
+
+/**
+ * @brief Forces all high-power outputs to a safe (OFF) state.
+ */
+void performSafeShutdown() {
+  digitalWrite(PIN_HP_CH, LOW);
+  digitalWrite(PIN_HP_COOL, LOW);
+  digitalWrite(PIN_BOILER, LOW);
+  digitalWrite(PIN_CIRC_1, LOW);
+  digitalWrite(PIN_CIRC_2, LOW);
+  digitalWrite(PIN_SOLAR_PUMP, LOW);
+}
+
+/**
+ * @brief Logs an error to Serial and updates system state.
+ * @param msg Error description
+ */
+void handleSystemError(const __FlashStringHelper* msg) {
+  Serial.print(F("CRITICAL ERROR: "));
+  Serial.println(msg);
+  g_currentMode = SystemMode::ERROR;
+  performSafeShutdown();
+}
 
 // =============================================================================
 // Initialization
 // =============================================================================
 
 void setup() {
-  Serial.begin(9600);   // Debug Console
-  Serial1.begin(9600);  // Nextion HMI (Hardware Serial1)
+  Serial.begin(9600);
+  Serial1.begin(9600); // Nextion
 
-  sensors.begin();
-  dht.begin();
+  g_sensors.begin();
+  g_dht.begin();
 
-  // Pin Configuration
-  const uint8_t outputPins[] = {
-    HEAT_PUMP_CH_PIN, HEAT_PUMP_COOLING_PIN, BOILER_PIN,
-    FIRST_FLOOR_CIRC_PIN, SECOND_FLOOR_CIRC_PIN,
-    SOLAR_CIRCULATOR_PUMP_PIN, OVERHEAT_VALVE_PIN
+  const uint8_t outputs[] = {
+    PIN_HP_CH, PIN_HP_COOL, PIN_BOILER, PIN_CIRC_1,
+    PIN_CIRC_2, PIN_SOLAR_PUMP, PIN_OVERHEAT_VALVE
   };
-  for (uint8_t pin : outputPins) pinMode(pin, OUTPUT);
+  for (uint8_t p : outputs) pinMode(p, OUTPUT);
 
-  pinMode(DEFROST_INPUT_PIN, INPUT_PULLUP);
-  pinMode(HEAT_PUMP_FAIL_PIN, INPUT_PULLUP);
+  pinMode(PIN_DEFROST, INPUT_PULLUP);
+  pinMode(PIN_HP_FAIL, INPUT_PULLUP);
 
-  setHeatPumpOff();
-  Serial.println(F("HVAC System Initialized (GIGA R1)"));
+  performSafeShutdown();
+  Serial.println(F("HVAC Control System Online"));
 }
 
 // =============================================================================
-// Main Execution Loop
+// Logic Execution
 // =============================================================================
 
 void loop() {
-  receiveNextionData();
+  processHmiInput();
 
-  static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate >= 3000) {
-    readTelemetry();
-    processHvacLogic();
-    updateHmiDisplay();
-    lastUpdate = millis();
+  static uint32_t lastTaskTime = 0;
+  if (millis() - lastTaskTime >= 3000) {
+    updateTelemetry();
+    executeControlLogic();
+    refreshHmiDisplay();
+    lastTaskTime = millis();
   }
 }
 
-// =============================================================================
-// Data Acquisition
-// =============================================================================
-
 /**
- * @brief Reads all system sensors and calculates derived values
+ * @brief Samples all sensors and validates data.
  */
-void readTelemetry() {
-  sensors.requestTemperatures();
+void updateTelemetry() {
+  g_sensors.requestTemperatures();
 
-  tankOutletTemp = sensors.getTempFByIndex(0);
-  tankInletTemp = sensors.getTempFByIndex(1);
-  outsideTempF = sensors.getTempFByIndex(2);
-  dhwTankTemp = sensors.getTempFByIndex(3);
-  solarCollectorTemp = sensors.getTempFByIndex(4);
+  g_data.tankOutlet = g_sensors.getTempFByIndex(0);
+  g_data.tankInlet = g_sensors.getTempFByIndex(1);
+  g_data.ambient = g_sensors.getTempFByIndex(2);
+  g_data.dhwTank = g_sensors.getTempFByIndex(3);
+  g_data.solarCollector = g_sensors.getTempFByIndex(4);
 
-  float h = dht.readHumidity();
-  float t = dht.readTemperature(true);
+  float h = g_dht.readHumidity();
+  float t = g_dht.readTemperature(true);
+
   if (!isnan(h) && !isnan(t)) {
-    utilityHumidity = h;
-    dewPointF = calculateDewPoint(t, h);
+    g_data.humidity = h;
+    // Magnus-Tetens approximation
+    float tempC = (t - 32.0f) * 5.0f / 9.0f;
+    const float a = 17.625f, b = 243.04f;
+    float alpha = log(h / 100.0f) + (a * tempC) / (b + tempC);
+    g_data.dewPoint = ((b * alpha) / (a - alpha) * 9.0f / 5.0f) + 32.0f;
   }
 }
 
-// =============================================================================
-// Control Logic
-// =============================================================================
-
 /**
- * @brief Processes system logic and drives outputs
+ * @brief Core decision making for HVAC and Solar.
  */
-void processHvacLogic() {
-  // Fault and Status checks
-  if (digitalRead(HEAT_PUMP_FAIL_PIN) == LOW) {
-    currentMode = MODE_ERROR;
-  } else if (digitalRead(DEFROST_INPUT_PIN) == LOW) {
-    currentMode = MODE_DEFROST;
-  }
-
-  // Critical Sensor Check
-  if (outsideTempF == DEVICE_DISCONNECTED_F || tankOutletTemp == DEVICE_DISCONNECTED_F ||
-      tankInletTemp == DEVICE_DISCONNECTED_F) {
-    currentMode = MODE_ERROR;
-    runOffMode();
+void executeControlLogic() {
+  // 1. Hardware Safety Check
+  if (digitalRead(PIN_HP_FAIL) == LOW) {
+    handleSystemError(F("Heat Pump Hardware Failure"));
     return;
   }
 
-  const float deltaT = calculateDeltaT(tankOutletTemp, tankInletTemp);
-
-  // Seasonal Logic
-  if (outsideTempF < OUTSIDE_HEATING_THRESHOLD) {
-    runHeatingSeason(deltaT);
-  } else if (outsideTempF >= OUTSIDE_HEATING_THRESHOLD && outsideTempF <= OUTSIDE_COOLING_THRESHOLD) {
-    runOffMode();
-  } else if (outsideTempF > OUTSIDE_COOLING_THRESHOLD) {
-    runCoolingSeason(deltaT);
+  // 2. Sensor Integrity Check
+  if (g_data.ambient == DEVICE_DISCONNECTED_F || g_data.tankOutlet == DEVICE_DISCONNECTED_F) {
+    handleSystemError(F("Critical Temperature Sensor Lost"));
+    return;
   }
 
-  // Independent Solar DHW Logic
-  processSolarLogic();
+  if (digitalRead(PIN_DEFROST) == LOW) {
+    g_currentMode = SystemMode::DEFROST;
+    performSafeShutdown();
+    return;
+  }
+
+  const float deltaT = abs(g_data.tankOutlet - g_data.tankInlet);
+
+  // 3. HVAC Seasonal Management
+  if (g_data.ambient < Config::HEATING_THRESHOLD) {
+    processHeating(deltaT);
+  } else if (g_data.ambient > Config::COOLING_THRESHOLD) {
+    processCooling(deltaT);
+  } else {
+    g_currentMode = SystemMode::OFF;
+    performSafeShutdown();
+  }
+
+  // 4. Independent Solar Logic
+  processSolar();
 }
 
-/**
- * @brief Logic for heating season (<65°F)
- */
-void runHeatingSeason(float deltaT) {
-  digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
-  digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
+void processHeating(float deltaT) {
+  digitalWrite(PIN_CIRC_1, HIGH);
+  digitalWrite(PIN_CIRC_2, HIGH);
 
-  const bool hpAllowed = (outsideTempF >= HEAT_PUMP_MIN_TEMP &&
-                          outsideTempF > HEAT_PUMP_OFF_TEMP);
+  bool hpOk = (g_data.ambient >= Config::HP_MIN_AMBIENT && g_data.ambient > Config::HP_CRITICAL_LOW);
 
-  if (hpAllowed && currentMode != MODE_ERROR) {
-    if (deltaT >= DELTA_T_HEATING_ON) {
-      setHeatPumpCH();
-      digitalWrite(BOILER_PIN, HIGH);
-    } else if (tankOutletTemp < HEATING_MIN_OUTLET_TEMP) {
-      setHeatPumpCH();
-      digitalWrite(BOILER_PIN, LOW);
-    } else if (deltaT <= DELTA_T_HEATING_THRESHOLD) {
-      setHeatPumpOff();
-      digitalWrite(BOILER_PIN, LOW);
+  if (hpOk && g_currentMode != SystemMode::ERROR) {
+    if (deltaT >= Config::DELTA_T_HEATING_ON) {
+      g_currentMode = SystemMode::HP_HEATING;
+      digitalWrite(PIN_HP_COOL, LOW);
+      digitalWrite(PIN_HP_CH, HIGH);
+      digitalWrite(PIN_BOILER, HIGH);
+    } else if (g_data.tankOutlet < Config::HEATING_MIN_OUTLET) {
+      g_currentMode = SystemMode::HP_HEATING;
+      digitalWrite(PIN_HP_COOL, LOW);
+      digitalWrite(PIN_HP_CH, HIGH);
+      digitalWrite(PIN_BOILER, LOW);
+    } else if (deltaT <= Config::DELTA_T_HEATING_OFF) {
+      digitalWrite(PIN_HP_CH, LOW);
+      digitalWrite(PIN_BOILER, LOW);
+      g_currentMode = SystemMode::OFF;
     }
   } else {
-    // Boiler Fallback
-    setHeatPumpOff();
-    if (deltaT >= DELTA_T_HEATING_ON || tankOutletTemp < HEATING_MIN_OUTLET_TEMP) {
-      digitalWrite(BOILER_PIN, HIGH);
-      if (currentMode != MODE_ERROR) currentMode = MODE_BOILER_CH;
+    // Boiler Backup
+    digitalWrite(PIN_HP_CH, LOW);
+    if (deltaT >= Config::DELTA_T_HEATING_ON || g_data.tankOutlet < Config::HEATING_MIN_OUTLET) {
+      digitalWrite(PIN_BOILER, HIGH);
+      if (g_currentMode != SystemMode::ERROR) g_currentMode = SystemMode::BOILER_HEATING;
     } else {
-      digitalWrite(BOILER_PIN, LOW);
+      digitalWrite(PIN_BOILER, LOW);
     }
   }
 }
 
-/**
- * @brief Logic for cooling season (>70°F)
- */
-void runCoolingSeason(float deltaT) {
-  digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
-  digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
-  digitalWrite(BOILER_PIN, LOW);
+void processCooling(float deltaT) {
+  digitalWrite(PIN_CIRC_1, HIGH);
+  digitalWrite(PIN_CIRC_2, HIGH);
+  digitalWrite(PIN_BOILER, LOW);
 
-  const bool inRange = (tankInletTemp >= COOLING_MIN_INLET_TEMP &&
-                        tankInletTemp <= COOLING_MAX_INLET_TEMP);
-  const bool aboveDewPoint = (tankOutletTemp >= (dewPointF + DEW_POINT_BUFFER));
+  bool inRange = (g_data.tankInlet >= Config::COOLING_MIN_INLET && g_data.tankInlet <= Config::COOLING_MAX_INLET);
+  bool safeDew = (g_data.tankOutlet >= (g_data.dewPoint + Config::DEW_POINT_BUFFER));
 
-  if (inRange && aboveDewPoint) {
-    if (deltaT >= DELTA_T_COOLING_ON) {
-      setHeatPumpCooling();
-    } else if (deltaT <= DELTA_T_COOLING_THRESHOLD) {
-      setHeatPumpOff();
+  if (inRange && safeDew) {
+    if (deltaT >= Config::DELTA_T_COOLING_ON) {
+      g_currentMode = SystemMode::HP_COOLING;
+      digitalWrite(PIN_HP_CH, LOW);
+      digitalWrite(PIN_HP_COOL, HIGH);
+    } else if (deltaT <= Config::DELTA_T_COOLING_OFF) {
+      digitalWrite(PIN_HP_COOL, LOW);
+      g_currentMode = SystemMode::OFF;
     }
   } else {
-    setHeatPumpOff();
+    digitalWrite(PIN_HP_COOL, LOW);
   }
 }
 
-/**
- * @brief Logic for System OFF range (65-70°F)
- */
-void runOffMode() {
-  setHeatPumpOff();
-  digitalWrite(BOILER_PIN, LOW);
-  digitalWrite(FIRST_FLOOR_CIRC_PIN, LOW);
-  digitalWrite(SECOND_FLOOR_CIRC_PIN, LOW);
-  currentMode = MODE_OFF;
-}
-
-/**
- * @brief Processes Solar DHW logic
- */
-void processSolarLogic() {
-  // Sensor safety check
-  if (solarCollectorTemp == DEVICE_DISCONNECTED_F || dhwTankTemp == DEVICE_DISCONNECTED_F) {
-    digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, LOW);
-    solarPumpRunning = false;
+void processSolar() {
+  if (g_data.solarCollector == DEVICE_DISCONNECTED_F || g_data.dhwTank == DEVICE_DISCONNECTED_F) {
+    digitalWrite(PIN_SOLAR_PUMP, LOW);
+    g_solarActive = false;
     return;
   }
 
-  if ((solarCollectorTemp - dhwTankTemp) >= SOLAR_DHW_DELTA_T &&
-      dhwTankTemp < DHW_OVERHEAT_TEMP) {
-    solarPumpRunning = true;
-    digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
+  if ((g_data.solarCollector - g_data.dhwTank) >= Config::SOLAR_DELTA_T_ON &&
+      g_data.dhwTank < Config::DHW_MAX_TEMP) {
+    g_solarActive = true;
+    digitalWrite(PIN_SOLAR_PUMP, HIGH);
   } else {
-    solarPumpRunning = false;
-    digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, LOW);
+    g_solarActive = false;
+    digitalWrite(PIN_SOLAR_PUMP, LOW);
   }
 }
 
 // =============================================================================
-// Helper Functions
+// HMI Communication
 // =============================================================================
 
-/**
- * @brief Activates Heat Pump in Central Heating mode
- */
-void setHeatPumpCH() {
-  currentMode = MODE_HEAT_PUMP_CH;
-  digitalWrite(HEAT_PUMP_COOLING_PIN, LOW);
-  digitalWrite(HEAT_PUMP_CH_PIN, HIGH);
+void sendHmiNum(const char* name, int val) {
+  Serial1.print(name);
+  Serial1.print(F(".val="));
+  Serial1.print(val);
+  Serial1.write(NEXTION_END, 3);
 }
 
-/**
- * @brief Activates Heat Pump in Cooling mode
- */
-void setHeatPumpCooling() {
-  currentMode = MODE_HEAT_PUMP_COOLING;
-  digitalWrite(HEAT_PUMP_CH_PIN, LOW);
-  digitalWrite(HEAT_PUMP_COOLING_PIN, HIGH);
+void sendHmiTxt(const char* name, const char* txt) {
+  Serial1.print(name);
+  Serial1.print(F(".txt=\""));
+  Serial1.print(txt);
+  Serial1.print(F("\""));
+  Serial1.write(NEXTION_END, 3);
 }
 
-/**
- * @brief Deactivates all Heat Pump outputs
- */
-void setHeatPumpOff() {
-  digitalWrite(HEAT_PUMP_CH_PIN, LOW);
-  digitalWrite(HEAT_PUMP_COOLING_PIN, LOW);
-  if (currentMode != MODE_ERROR && currentMode != MODE_DEFROST) {
-    currentMode = MODE_OFF;
+void refreshHmiDisplay() {
+  sendHmiNum("n0", (int)g_data.tankInlet);
+  sendHmiNum("n1", (int)g_data.tankOutlet);
+  sendHmiNum("n2", (int)g_data.dhwTank);
+  sendHmiNum("n3", (int)g_data.ambient);
+  sendHmiNum("n4", (int)g_data.solarCollector);
+  sendHmiNum("n5", (int)g_data.humidity);
+
+  const char* statusStr = "SYSTEM OFF";
+  switch (g_currentMode) {
+    case SystemMode::HP_COOLING:     statusStr = "HP COOLING"; break;
+    case SystemMode::HP_HEATING:     statusStr = "HP HEATING"; break;
+    case SystemMode::BOILER_HEATING: statusStr = "BOILER ON";  break;
+    case SystemMode::DEFROST:        statusStr = "DEFROSTING"; break;
+    case SystemMode::ERROR:          statusStr = "SYS ERROR";  break;
   }
+  sendHmiTxt("t0", statusStr);
+  sendHmiTxt("t1", (digitalRead(PIN_BOILER) == HIGH) ? "BOILER ACT" : "BOILER OFF");
+  sendHmiTxt("t2", g_solarActive ? "SOLAR ON" : "SOLAR OFF");
+  sendHmiTxt("t3", (g_data.dhwTank >= Config::DHW_MAX_TEMP) ? "DHW OVERHEAT" : "DHW NORMAL");
 }
 
 /**
- * @brief Calculates absolute temperature difference
- * @param outlet Outlet temperature
- * @param inlet Inlet temperature
- * @return Absolute difference
+ * @brief Dispatches commands received from the Nextion HMI.
+ * @param cmd The command character ('0'-'9')
  */
-float calculateDeltaT(float outlet, float inlet) {
-  return abs(outlet - inlet);
-}
-
-/**
- * @brief Calculates dew point using Magnus-Tetens approximation
- * @param tempF Temperature in Fahrenheit
- * @param humidity Relative humidity in percent
- * @return Dew point in Fahrenheit
- */
-float calculateDewPoint(float tempF, float humidity) {
-  float tempC = (tempF - 32.0f) * 5.0f / 9.0f;
-  const float a = 17.625f;
-  const float b = 243.04f;
-  float alpha = log(humidity / 100.0f) + (a * tempC) / (b + tempC);
-  float dewPointC = (b * alpha) / (a - alpha);
-  return (dewPointC * 9.0f / 5.0f) + 32.0f;
-}
-
-// =============================================================================
-// HMI Communication (Nextion)
-// =============================================================================
-
-/**
- * @brief Sends a text update to the Nextion display
- * @param component Nextion component name (e.g., "t0")
- * @param value String to display
- */
-void updateNextionText(const String& component, const String& value) {
-  Serial1.print(component + ".txt=\"" + value + "\"");
-  Serial1.write(NEXTION_TERMINATOR, 3);
-}
-
-/**
- * @brief Sends a numeric update to the Nextion display
- * @param component Nextion component name (e.g., "n0")
- * @param value Integer value to display
- */
-void updateNextionNumber(const String& component, int value) {
-  Serial1.print(component + ".val=" + String(value));
-  Serial1.write(NEXTION_TERMINATOR, 3);
-}
-
-/**
- * @brief Updates all Nextion HMI components with current telemetry
- */
-void updateHmiDisplay() {
-  updateNextionNumber("n0", (int)tankInletTemp);
-  updateNextionNumber("n1", (int)tankOutletTemp);
-  updateNextionNumber("n2", (int)dhwTankTemp);
-  updateNextionNumber("n3", (int)outsideTempF);
-  updateNextionNumber("n4", (int)solarCollectorTemp);
-  updateNextionNumber("n5", (int)utilityHumidity);
-
-  switch (currentMode) {
-    case MODE_HEAT_PUMP_COOLING: updateNextionText("t0", "HeatPumpCooling"); break;
-    case MODE_HEAT_PUMP_CH:      updateNextionText("t0", "HeatPumpHeating"); break;
-    case MODE_OFF:               updateNextionText("t0", "HP OFF");           break;
-    case MODE_ERROR:             updateNextionText("t0", "ERROR");            break;
-    default:                     updateNextionText("t0", "HP ACTIVE");        break;
-  }
-
-  updateNextionText("t1", (digitalRead(BOILER_PIN) == HIGH) ? "Boiler Heating" : "Boiler OFF");
-  updateNextionText("t2", solarPumpRunning ? "DHW ON" : "DHW OFF");
-
-  if (dhwTankTemp >= DHW_OVERHEAT_TEMP) {
-    updateNextionText("t3", "DHWTank Overheating");
-  } else {
-    updateNextionText("t3", "DHW Normal");
-  }
-}
-
-// =============================================================================
-// Input Handling
-// =============================================================================
-
-/**
- * @brief Listens for serial data from Nextion HMI
- */
-void receiveNextionData() {
-  while (Serial1.available()) {
-    uint8_t c = Serial1.read();
-    if (c >= '0' && c <= '9') processCommand(c);
-    if (c == 0x65) { // Nextion touch event prefix
-      uint8_t buf[6];
-      Serial1.readBytes(buf, 6);
-    }
-  }
-}
-
-/**
- * @brief Processes numeric commands from HMI
- * @param cmd Char code '0'-'9'
- */
-void processCommand(uint8_t cmd) {
-  Serial.print(F("Nextion Command Received: "));
-  Serial.println((char)cmd);
+void dispatchHmiCommand(char cmd) {
+  Serial.print(F("HMI Command Executing: "));
+  Serial.println(cmd);
 
   switch (cmd) {
-    case '0': Serial.println(F("System Normal")); break;
-    case '1': Serial.println(F("Force Heat Mode")); break;
-    case '2': Serial.println(F("Force Cool Mode")); break;
-    default:  Serial.println(F("Unknown Command")); break;
+    case '0': // Normal / Reset
+      if (g_currentMode == SystemMode::ERROR) {
+        g_currentMode = SystemMode::OFF;
+        Serial.println(F("System Error Cleared by HMI"));
+      }
+      break;
+    default:
+      Serial.println(F("Unhandled HMI Command"));
+      break;
+  }
+}
+
+/**
+ * @brief Listens and parses serial data from the Nextion display.
+ */
+void processHmiInput() {
+  while (Serial1.available()) {
+    uint8_t c = Serial1.read();
+
+    if (c >= '0' && c <= '9') {
+      dispatchHmiCommand((char)c);
+    } else if (c == 0x65) { // Nextion Touch Event Prefix
+      uint8_t buffer[6];
+      Serial1.readBytes(buffer, 6);
+    }
   }
 }
