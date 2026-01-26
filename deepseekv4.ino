@@ -20,8 +20,8 @@ const int DHT_PIN = 10;
 const int HEAT_PUMP_CH_PIN = 3;
 const int HEAT_PUMP_COOLING_PIN = 4;
 const int BOILER_PIN = 6;
-const int CIRCULATOR_PUMP_PIN = 7;
-const int TWO_WAY_VALVE_PIN = 8;
+const int FIRST_FLOOR_CIRC_PIN = 7;
+const int SECOND_FLOOR_CIRC_PIN = 8;
 const int DEFROST_INPUT_PIN = 9;
 const int HEAT_PUMP_FAIL_PIN = 11;
 const int SOLAR_CIRCULATOR_PUMP_PIN = 14;
@@ -32,7 +32,6 @@ enum SystemMode {
   MODE_OFF,
   MODE_HEAT_PUMP_COOLING,
   MODE_HEAT_PUMP_CH,
-  MODE_HEAT_PUMP_DHW,
   MODE_BOILER_CH,
   MODE_SOLAR_DHW,
   MODE_DEFROST,
@@ -52,13 +51,6 @@ float outsideTempF = 0;
 float dhwTankTemp = 0;
 float solarCollectorTemp = 0;
 float utilityHumidity = 0;
-
-// Temperature sensor addresses
-DeviceAddress tankOutlet = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0A };
-DeviceAddress tankInlet = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0B };
-DeviceAddress outsideTemp = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0C };
-DeviceAddress dhwTankSensor = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0D };
-DeviceAddress solarCollectorSensor = { 0x28, 0xFF, 0x64, 0x1E, 0x3C, 0x14, 0x01, 0x0E };
 
 // OneWire and DHT setup
 OneWire oneWire(ONE_WIRE_BUS);
@@ -80,8 +72,8 @@ void setup() {
   pinMode(HEAT_PUMP_CH_PIN, OUTPUT);
   pinMode(HEAT_PUMP_COOLING_PIN, OUTPUT);
   pinMode(BOILER_PIN, OUTPUT);
-  pinMode(CIRCULATOR_PUMP_PIN, OUTPUT);
-  pinMode(TWO_WAY_VALVE_PIN, OUTPUT);
+  pinMode(FIRST_FLOOR_CIRC_PIN, OUTPUT);
+  pinMode(SECOND_FLOOR_CIRC_PIN, OUTPUT);
   pinMode(SOLAR_CIRCULATOR_PUMP_PIN, OUTPUT);
   pinMode(OVERHEAT_VALVE_PIN, OUTPUT);
 
@@ -108,22 +100,37 @@ void loop() {
 
 void readSensors() {
   sensors.requestTemperatures();
-  tankOutletTemp = sensors.getTempF(tankOutlet);
-  tankInletTemp = sensors.getTempF(tankInlet);
-  outsideTempF = sensors.getTempF(outsideTemp);
-  dhwTankTemp = sensors.getTempF(dhwTankSensor);
-  solarCollectorTemp = sensors.getTempF(solarCollectorSensor);
+
+  // Use index-based reading to ensure compatibility without known addresses
+  tankOutletTemp = sensors.getTempFByIndex(0);
+  tankInletTemp = sensors.getTempFByIndex(1);
+  outsideTempF = sensors.getTempFByIndex(2);
+  dhwTankTemp = sensors.getTempFByIndex(3);
+  solarCollectorTemp = sensors.getTempFByIndex(4);
   utilityHumidity = dht.readHumidity();
 
   // Only apply automatic logic if not in manual override
   if (!manualOverride) {
-    // Mode Logic based on Outside Temp (15C threshold)
-    float outsideTempC = (outsideTempF - 32.0) * 5.0 / 9.0;
+    // Mode Logic based on Outside Temp
     if (outsideTempF != -196.6) { // Check for sensor presence
-      if (outsideTempC > 15.0) {
+      if (outsideTempF >= 64.0 && outsideTempF <= 70.0) {
+        // OFF Mode range
+        setHeatPumpOff();
+        digitalWrite(BOILER_PIN, LOW);
+        digitalWrite(FIRST_FLOOR_CIRC_PIN, LOW);
+        digitalWrite(SECOND_FLOOR_CIRC_PIN, LOW);
+        currentMode = MODE_OFF;
+      } else if (outsideTempF > 70.0) {
+        // Cooling Mode
         setHeatPumpCooling();
+        digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
+        digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
       } else {
+        // Heating Mode (< 64.0)
         setHeatPumpCH();
+        digitalWrite(BOILER_PIN, HIGH); // Boiler ON for heating support
+        digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
+        digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
       }
     }
 
@@ -206,8 +213,9 @@ void updateHmiDisplay() {
 void receiveNextionData() {
   while (Serial1.available()) {
     char c = Serial1.read();
-    if ((c >= '1' && c <= '6') || ((uint8_t)c >= 1 && (uint8_t)c <= 6)) {
-      char cmd = (c >= '1' && c <= '6') ? c : (c + '0');
+    // Commands '0' to '6' (0 is Auto mode)
+    if ((c >= '0' && c <= '6') || ((uint8_t)c >= 0 && (uint8_t)c <= 6)) {
+      char cmd = (c >= '0' && c <= '6') ? c : (c + '0');
       processManualCommand(cmd);
     }
     if ((uint8_t)c == 0x65) { // Flush touch events
@@ -217,14 +225,37 @@ void receiveNextionData() {
 }
 
 void processManualCommand(char cmd) {
-  manualOverride = true; // Engage manual override when HMI command received
-  Serial.print(F("Manual Override Activated: ")); Serial.println(cmd);
+  if (cmd == '0') {
+    manualOverride = false;
+    Serial.println(F("Auto Mode Restored"));
+  } else {
+    manualOverride = true;
+    Serial.print(F("Manual Override Activated: ")); Serial.println(cmd);
+  }
 
   switch (cmd) {
-    case '1': setHeatPumpCH(); break;
-    case '2': setHeatPumpCooling(); break;
-    case '3': currentMode = MODE_DEFROST; setHeatPumpOff(); break;
-    case '4': currentMode = MODE_ERROR;   setHeatPumpOff(); break;
+    case '1':
+      setHeatPumpCH();
+      digitalWrite(BOILER_PIN, HIGH);
+      digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
+      digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
+      break;
+    case '2':
+      setHeatPumpCooling();
+      digitalWrite(BOILER_PIN, LOW);
+      digitalWrite(FIRST_FLOOR_CIRC_PIN, HIGH);
+      digitalWrite(SECOND_FLOOR_CIRC_PIN, HIGH);
+      break;
+    case '3':
+      currentMode = MODE_DEFROST;
+      setHeatPumpOff();
+      digitalWrite(BOILER_PIN, LOW);
+      break;
+    case '4':
+      currentMode = MODE_ERROR;
+      setHeatPumpOff();
+      digitalWrite(BOILER_PIN, LOW);
+      break;
     case '5':
       solarPumpRunning = true;
       digitalWrite(SOLAR_CIRCULATOR_PUMP_PIN, HIGH);
