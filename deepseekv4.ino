@@ -143,6 +143,7 @@ void loop() {
     updateTelemetry();
     executeControlLogic();
     refreshHmiDisplay();
+    printDebugTelemetry();
     lastTaskTime = millis();
   }
 }
@@ -297,8 +298,23 @@ void processSolar() {
 }
 
 // =============================================================================
-// HMI Communication
+// HMI & Debug Communication
 // =============================================================================
+
+/**
+ * @brief Prints all current telemetry to the Serial Monitor for debugging.
+ */
+void printDebugTelemetry() {
+  Serial.println(F("--- DEBUG TELEMETRY ---"));
+  Serial.print(F("Tank Inlet: ")); Serial.print(g_data.tankInlet); Serial.println(F(" F"));
+  Serial.print(F("Tank Outlet: ")); Serial.print(g_data.tankOutlet); Serial.println(F(" F"));
+  Serial.print(F("DHW Tank: ")); Serial.print(g_data.dhwTank); Serial.println(F(" F"));
+  Serial.print(F("Ambient: ")); Serial.print(g_data.ambient); Serial.println(F(" F"));
+  Serial.print(F("Solar Coll: ")); Serial.print(g_data.solarCollector); Serial.println(F(" F"));
+  Serial.print(F("Humidity: ")); Serial.print(g_data.humidity); Serial.println(F(" %"));
+  Serial.print(F("Dew Point: ")); Serial.print(g_data.dewPoint); Serial.println(F(" F"));
+  Serial.println(F("-----------------------"));
+}
 
 void sendHmiNum(const char* name, int val) {
   Serial1.print(name);

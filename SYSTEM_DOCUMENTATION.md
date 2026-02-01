@@ -63,7 +63,7 @@ The system prioritizes equipment longevity and home safety:
 - **Safe Shutdown:** A dedicated `performSafeShutdown()` routine forces all high-power outputs to `LOW` in the event of a critical error.
 
 ## 6. HMI Interface Protocol
-The Nextion display is updated every 3 seconds. The firmware utilizes an **optimized iteration routine** to update telemetry fields, reducing serial overhead.
+The Nextion display is updated every 3 seconds. The firmware utilizes an **optimized iteration routine** to update telemetry fields, reducing serial overhead. Simultaneously, the system outputs a full telemetry report to the **Serial Monitor** at 9600 baud for debugging purposes.
 
 ### Telemetry (Numeric)
 - `n0`: Tank Inlet Temp
