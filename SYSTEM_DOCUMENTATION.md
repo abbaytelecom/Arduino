@@ -75,9 +75,9 @@ The Nextion display is updated every 3 seconds. The firmware utilizes an **optim
 
 ### Status (Text)
 - `t0`: Main System Mode (OFF, HP COOLING, HP HEATING, etc.)
-- `t1`: Boiler Status
-- `t2`: Solar Pump Status
-- `t3`: DHW Overheat Alert
+- `t1`: DHW Status (DHW ON, DHW OFF, DHW OVERHEAT)
+- `t2`: Boiler Status (BOILER ACT, BOILER OFF)
+- `t3`: System Health Status (HEALTH OK, SYS FAULT)
 
 ### Command Dispatcher
 The `dispatchHmiCommand` function allows the display to trigger specific actions, such as resetting the system after an error state has been cleared.

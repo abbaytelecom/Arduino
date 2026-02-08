@@ -368,9 +368,21 @@ void refreshHmiDisplay() {
   }
 
   sendHmiTxt("t0", statusStr);
-  sendHmiTxt("t1", (digitalRead(PIN_BOILER) == HIGH) ? "BOILER ACT" : "BOILER OFF");
-  sendHmiTxt("t2", g_solarActive ? "SOLAR ON" : "SOLAR OFF");
-  sendHmiTxt("t3", (g_data.dhwTank >= Config::DHW_MAX_TEMP) ? "DHW OVERHEAT" : "DHW NORMAL");
+
+  // t1: DHW ON, OFF or Overheating
+  const char* dhwStr = "DHW OFF";
+  if (g_data.dhwTank >= Config::DHW_MAX_TEMP) {
+    dhwStr = "DHW OVERHEAT";
+  } else if (g_solarActive) {
+    dhwStr = "DHW ON";
+  }
+  sendHmiTxt("t1", dhwStr);
+
+  // t2: Boiler Status
+  sendHmiTxt("t2", (digitalRead(PIN_BOILER) == HIGH) ? "BOILER ACT" : "BOILER OFF");
+
+  // t3: System Health
+  sendHmiTxt("t3", (g_currentMode == SystemMode::ERROR) ? "SYS FAULT" : "HEALTH OK");
 }
 
 /**
