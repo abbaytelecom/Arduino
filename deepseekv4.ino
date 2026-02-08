@@ -347,8 +347,8 @@ void sendHmiTxt(const char* name, const char* txt) {
 void refreshHmiDisplay() {
   // 1. Update Numeric Fields (n0 - n5) using optimized iteration
   const float* telemetryRefs[] = {
-    &g_data.tankInlet, &g_data.tankOutlet, &g_data.dhwTank,
-    &g_data.ambient, &g_data.solarCollector, &g_data.humidity
+    &g_data.ambient, &g_data.tankInlet, &g_data.tankOutlet,
+    &g_data.dhwTank, &g_data.solarCollector, &g_data.humidity
   };
 
   char cmdBuffer[3] = {'n', '0', '\0'};

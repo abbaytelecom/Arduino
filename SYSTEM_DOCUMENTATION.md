@@ -66,10 +66,10 @@ The system prioritizes equipment longevity and home safety:
 The Nextion display is updated every 3 seconds. The firmware utilizes an **optimized iteration routine** to update telemetry fields, reducing serial overhead. Simultaneously, the system outputs a full telemetry report to the **Serial Monitor** at 9600 baud for debugging purposes.
 
 ### Telemetry (Numeric)
-- `n0`: Tank Inlet Temp
-- `n1`: Tank Outlet Temp
-- `n2`: DHW Tank Temp
-- `n3`: Ambient Outside Temp
+- `n0`: Ambient Outside Temp
+- `n1`: Tank Inlet Temp
+- `n2`: Tank Outlet Temp
+- `n3`: DHW Tank Temp
 - `n4`: Solar Collector Temp
 - `n5`: Utility Humidity (%)
 
