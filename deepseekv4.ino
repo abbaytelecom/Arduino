@@ -306,6 +306,19 @@ void processSolar() {
  */
 void printDebugTelemetry() {
   Serial.println(F("--- DEBUG TELEMETRY ---"));
+
+  const char* modeStr = "OFF";
+  switch (g_currentMode) {
+    case SystemMode::HP_COOLING:     modeStr = "HP COOLING"; break;
+    case SystemMode::HP_HEATING:     modeStr = "HP HEATING"; break;
+    case SystemMode::BOILER_HEATING: modeStr = "BOILER HEATING"; break;
+    case SystemMode::DEFROST:        modeStr = "DEFROSTING"; break;
+    case SystemMode::ERROR:          modeStr = "ERROR"; break;
+    default:                         modeStr = "OFF"; break;
+  }
+  Serial.print(F("System Mode: ")); Serial.println(modeStr);
+  Serial.print(F("Solar DHW: ")); Serial.println(g_solarActive ? F("ACTIVE") : F("IDLE"));
+
   Serial.print(F("Tank Inlet: ")); Serial.print(g_data.tankInlet); Serial.println(F(" F"));
   Serial.print(F("Tank Outlet: ")); Serial.print(g_data.tankOutlet); Serial.println(F(" F"));
   Serial.print(F("DHW Tank: ")); Serial.print(g_data.dhwTank); Serial.println(F(" F"));
