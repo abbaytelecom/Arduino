@@ -363,6 +363,15 @@ void printDebugTelemetry() {
   Serial.print(F("n4 (Solar Coll): ")); Serial.print(g_data.solarCollector); Serial.println(F(" F"));
   Serial.print(F("n5 (Humidity): ")); Serial.print(g_data.humidity); Serial.println(F(" %"));
   Serial.print(F("n6 (Dew Point): ")); Serial.print(g_data.dewPoint); Serial.println(F(" F"));
+
+  Serial.println(F("--- HARDWARE OUTPUTS ---"));
+  Serial.print(F("HP CH (Pin 3): ")); Serial.println(digitalRead(PIN_HP_CH) == HIGH ? F("ON") : F("OFF"));
+  Serial.print(F("HP COOL (Pin 4): ")); Serial.println(digitalRead(PIN_HP_COOL) == HIGH ? F("ON") : F("OFF"));
+  Serial.print(F("BOILER (Pin 6): ")); Serial.println(digitalRead(PIN_BOILER) == HIGH ? F("ON") : F("OFF"));
+  Serial.print(F("CIRC 1 (Pin 7): ")); Serial.println(digitalRead(PIN_CIRC_1) == HIGH ? F("ON") : F("OFF"));
+  Serial.print(F("CIRC 2 (Pin 8): ")); Serial.println(digitalRead(PIN_CIRC_2) == HIGH ? F("ON") : F("OFF"));
+  Serial.print(F("SOLAR PUMP (Pin 14): ")); Serial.println(digitalRead(PIN_SOLAR_PUMP) == HIGH ? F("ON") : F("OFF"));
+  Serial.print(F("OVHT VALVE (Pin 15): ")); Serial.println(digitalRead(PIN_OVERHEAT_VALVE) == HIGH ? F("ON") : F("OFF"));
   Serial.println(F("-----------------------"));
 }
 
