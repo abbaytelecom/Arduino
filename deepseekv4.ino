@@ -332,13 +332,29 @@ const char* getDhwStatusStr() {
 }
 
 /**
+ * @brief Returns a string representation of the Boiler status.
+ */
+const char* getBoilerStatusStr() {
+  return (digitalRead(PIN_BOILER) == HIGH) ? "BOILER ACT" : "BOILER OFF";
+}
+
+/**
+ * @brief Returns a string representation of the System Health status.
+ */
+const char* getSystemHealthStr() {
+  return (g_currentMode == SystemMode::ERROR) ? "SYS FAULT" : "HEALTH OK";
+}
+
+/**
  * @brief Prints all current telemetry to the Serial Monitor for debugging.
  */
 void printDebugTelemetry() {
   Serial.println(F("--- DEBUG TELEMETRY ---"));
 
-  Serial.print(F("System Mode: ")); Serial.println(getSystemModeStr());
-  Serial.print(F("Solar DHW: ")); Serial.println(getDhwStatusStr());
+  Serial.print(F("System Mode (t0): ")); Serial.println(getSystemModeStr());
+  Serial.print(F("DHW Status (t1): ")); Serial.println(getDhwStatusStr());
+  Serial.print(F("Boiler Status (t2): ")); Serial.println(getBoilerStatusStr());
+  Serial.print(F("System Health (t3): ")); Serial.println(getSystemHealthStr());
 
   Serial.print(F("n0 (Ambient): ")); Serial.print(g_data.ambient); Serial.println(F(" F"));
   Serial.print(F("n1 (Inlet): ")); Serial.print(g_data.tankInlet); Serial.println(F(" F"));
@@ -382,12 +398,8 @@ void refreshHmiDisplay() {
   // 2. Update Status Text Fields (t0 - t3)
   sendHmiTxt("t0", getSystemModeStr());
   sendHmiTxt("t1", getDhwStatusStr());
-
-  // t2: Boiler Status
-  sendHmiTxt("t2", (digitalRead(PIN_BOILER) == HIGH) ? "BOILER ACT" : "BOILER OFF");
-
-  // t3: System Health
-  sendHmiTxt("t3", (g_currentMode == SystemMode::ERROR) ? "SYS FAULT" : "HEALTH OK");
+  sendHmiTxt("t2", getBoilerStatusStr());
+  sendHmiTxt("t3", getSystemHealthStr());
 }
 
 /**
