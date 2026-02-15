@@ -12,7 +12,7 @@ This report documents the verification of the control logic within `deepseekv4.i
 *   **Expected Results:**
     *   **HP Central Heating (Pin 3):** `LOW`
     *   **Boiler (Pin 6):** `HIGH`
-    *   **System Mode:** `BOILER_HEATING`
+    *   **System Mode:** `BOILER ON`
 
 ## Test Scenario 2: Cold (Boiler Takeover)
 *   **Input Conditions:** Ambient = `30.0°F`, Delta T = `30.0°F` (Inlet 70, Outlet 100).
@@ -24,7 +24,7 @@ This report documents the verification of the control logic within `deepseekv4.i
 *   **Expected Results:**
     *   **HP Central Heating (Pin 3):** `LOW` (Forced Off)
     *   **Boiler (Pin 6):** `HIGH`
-    *   **System Mode:** `BOILER_HEATING`
+    *   **System Mode:** `BOILER ON`
     *   **Anti-Short Cycle:** System will remain in this state for at least 10 minutes even if Delta T drops.
 
 ## Test Scenario 6: Heating Satisfied (Stale State Prevention)
@@ -36,7 +36,7 @@ This report documents the verification of the control logic within `deepseekv4.i
     4.  Logic falls into the `else` branch of the normal priority logic.
 *   **Expected Results:**
     *   **All Heating/Cooling Pins:** `LOW`
-    *   **System Mode:** `OFF` (Correctly clearing any previous 'HP COOLING' state)
+    *   **System Mode:** `SYSTEM OFF` (Correctly clearing any previous 'HP COOLING' state)
 
 ## Test Scenario 3: Normal (Deadband)
 *   **Input Conditions:** Ambient = `68.0°F`.
@@ -46,7 +46,7 @@ This report documents the verification of the control logic within `deepseekv4.i
     3.  `performSafeShutdown()` is executed.
 *   **Expected Results:**
     *   **HP / Boiler / Pumps:** All `LOW`
-    *   **System Mode:** `OFF`
+    *   **System Mode:** `SYSTEM OFF`
 
 ## Test Scenario 4: Hot
 *   **Input Conditions:** Ambient = `85.0°F`, Humidity = `50%`, Tank Inlet = `60°F`, Tank Outlet = `75°F`.
@@ -69,7 +69,7 @@ This report documents the verification of the control logic within `deepseekv4.i
 *   **Expected Results:**
     *   **HP Cooling (Pin 4):** `LOW`
     *   **Circulators (Pins 7/8):** `HIGH` (Maintains flow)
-    *   **System Mode:** `OFF` (Wait for thermal recovery)
+    *   **System Mode:** `SYSTEM OFF` (Wait for thermal recovery)
 
 ## Conclusion
 The logic walkthrough confirms that the firmware correctly prioritizes equipment safety (Dew Point protection, Ambient limits) and successfully manages multi-stage heating resources.

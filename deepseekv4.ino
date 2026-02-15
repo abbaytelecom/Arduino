@@ -306,22 +306,39 @@ void processSolar() {
 // =============================================================================
 
 /**
+ * @brief Returns a string representation of the current system mode.
+ */
+const char* getSystemModeStr() {
+  switch (g_currentMode) {
+    case SystemMode::HP_COOLING:     return "HP COOLING";
+    case SystemMode::HP_HEATING:     return "HP HEATING";
+    case SystemMode::BOILER_HEATING: return "BOILER ON";
+    case SystemMode::DEFROST:        return "DEFROSTING";
+    case SystemMode::ERROR:          return "SYS ERROR";
+    default:                         return "SYSTEM OFF";
+  }
+}
+
+/**
+ * @brief Returns a string representation of the DHW status.
+ */
+const char* getDhwStatusStr() {
+  if (g_data.dhwTank >= Config::DHW_MAX_TEMP) {
+    return "DHW OVERHEAT";
+  } else if (g_solarActive) {
+    return "DHW ON";
+  }
+  return "DHW OFF";
+}
+
+/**
  * @brief Prints all current telemetry to the Serial Monitor for debugging.
  */
 void printDebugTelemetry() {
   Serial.println(F("--- DEBUG TELEMETRY ---"));
 
-  const char* modeStr = "OFF";
-  switch (g_currentMode) {
-    case SystemMode::HP_COOLING:     modeStr = "HP COOLING"; break;
-    case SystemMode::HP_HEATING:     modeStr = "HP HEATING"; break;
-    case SystemMode::BOILER_HEATING: modeStr = "BOILER HEATING"; break;
-    case SystemMode::DEFROST:        modeStr = "DEFROSTING"; break;
-    case SystemMode::ERROR:          modeStr = "ERROR"; break;
-    default:                         modeStr = "OFF"; break;
-  }
-  Serial.print(F("System Mode: ")); Serial.println(modeStr);
-  Serial.print(F("Solar DHW: ")); Serial.println(g_solarActive ? F("ACTIVE") : F("IDLE"));
+  Serial.print(F("System Mode: ")); Serial.println(getSystemModeStr());
+  Serial.print(F("Solar DHW: ")); Serial.println(getDhwStatusStr());
 
   Serial.print(F("n0 (Ambient): ")); Serial.print(g_data.ambient); Serial.println(F(" F"));
   Serial.print(F("n1 (Inlet): ")); Serial.print(g_data.tankInlet); Serial.println(F(" F"));
@@ -329,7 +346,7 @@ void printDebugTelemetry() {
   Serial.print(F("n3 (DHW Tank): ")); Serial.print(g_data.dhwTank); Serial.println(F(" F"));
   Serial.print(F("n4 (Solar Coll): ")); Serial.print(g_data.solarCollector); Serial.println(F(" F"));
   Serial.print(F("n5 (Humidity): ")); Serial.print(g_data.humidity); Serial.println(F(" %"));
-  Serial.print(F("Dew Point: ")); Serial.print(g_data.dewPoint); Serial.println(F(" F"));
+  Serial.print(F("n6 (Dew Point): ")); Serial.print(g_data.dewPoint); Serial.println(F(" F"));
   Serial.println(F("-----------------------"));
 }
 
@@ -352,35 +369,19 @@ void refreshHmiDisplay() {
   // 1. Update Numeric Fields (n0 - n5) using optimized iteration
   const float* telemetryRefs[] = {
     &g_data.ambient, &g_data.tankInlet, &g_data.tankOutlet,
-    &g_data.dhwTank, &g_data.solarCollector, &g_data.humidity
+    &g_data.dhwTank, &g_data.solarCollector, &g_data.humidity,
+    &g_data.dewPoint
   };
 
   char cmdBuffer[3] = {'n', '0', '\0'};
-  for (uint8_t i = 0; i < 6; i++) {
+  for (uint8_t i = 0; i < 7; i++) {
     cmdBuffer[1] = '0' + i;
     sendHmiNum(cmdBuffer, (int)(*telemetryRefs[i]));
   }
 
   // 2. Update Status Text Fields (t0 - t3)
-  const char* statusStr = "SYSTEM OFF";
-  switch (g_currentMode) {
-    case SystemMode::HP_COOLING:     statusStr = "HP COOLING"; break;
-    case SystemMode::HP_HEATING:     statusStr = "HP HEATING"; break;
-    case SystemMode::BOILER_HEATING: statusStr = "BOILER ON";  break;
-    case SystemMode::DEFROST:        statusStr = "DEFROSTING"; break;
-    case SystemMode::ERROR:          statusStr = "SYS ERROR";  break;
-  }
-
-  sendHmiTxt("t0", statusStr);
-
-  // t1: DHW ON, OFF or Overheating
-  const char* dhwStr = "DHW OFF";
-  if (g_data.dhwTank >= Config::DHW_MAX_TEMP) {
-    dhwStr = "DHW OVERHEAT";
-  } else if (g_solarActive) {
-    dhwStr = "DHW ON";
-  }
-  sendHmiTxt("t1", dhwStr);
+  sendHmiTxt("t0", getSystemModeStr());
+  sendHmiTxt("t1", getDhwStatusStr());
 
   // t2: Boiler Status
   sendHmiTxt("t2", (digitalRead(PIN_BOILER) == HIGH) ? "BOILER ACT" : "BOILER OFF");

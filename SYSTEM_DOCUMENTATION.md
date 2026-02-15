@@ -63,7 +63,7 @@ The system prioritizes equipment longevity and home safety:
 - **Safe Shutdown:** A dedicated `performSafeShutdown()` routine forces all high-power outputs to `LOW` in the event of a critical error.
 
 ## 6. HMI Interface Protocol
-The Nextion display is updated every 3 seconds. The firmware utilizes an **optimized iteration routine** to update telemetry fields, reducing serial overhead. Simultaneously, the system outputs a full telemetry report to the **Serial Monitor** at 9600 baud for debugging purposes.
+The Nextion display is updated every 3 seconds. The firmware utilizes an **optimized iteration routine** to update telemetry fields, reducing serial overhead. Simultaneously, the system outputs a full telemetry report to the **Serial Monitor** at 9600 baud for debugging purposes, using the exact same status strings as the HMI.
 
 ### Telemetry (Numeric)
 - `n0`: Ambient Outside Temp
@@ -72,6 +72,7 @@ The Nextion display is updated every 3 seconds. The firmware utilizes an **optim
 - `n3`: DHW Tank Temp
 - `n4`: Solar Collector Temp
 - `n5`: Utility Humidity (%)
+- `n6`: Dew Point Temp
 
 ### Status (Text)
 - `t0`: Main System Mode (OFF, HP COOLING, HP HEATING, etc.)
