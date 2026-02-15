@@ -75,10 +75,13 @@ The Nextion display is updated every 3 seconds. The firmware utilizes an **optim
 - `n6`: Dew Point Temp
 
 ### Status (Text)
-- `t0`: Main System Mode (OFF, HP COOLING, HP HEATING, etc.)
+- `t0`: Main System Mode (SYSTEM OFF, HP COOLING, HP HEATING, etc.)
 - `t1`: DHW Status (DHW ON, DHW OFF, DHW OVERHEAT)
 - `t2`: Boiler Status (BOILER ACT, BOILER OFF)
 - `t3`: System Health Status (HEALTH OK, SYS FAULT)
+
+### Actuator Logic (Circulator Pumps)
+The **First Floor Circulator (Pin 7)** and **Second Floor Circulator (Pin 8)** are interlocked with the system mode. They are only active when the system is in an active heating or cooling state. If the System Mode is **SYSTEM OFF**, both circulators are forced **OFF** to conserve energy.
 
 ### Command Dispatcher
 The `dispatchHmiCommand` function allows the display to trigger specific actions, such as resetting the system after an error state has been cleared.

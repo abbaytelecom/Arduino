@@ -35,8 +35,9 @@ This report documents the verification of the control logic within `deepseekv4.i
     3.  Tank Outlet (105°F) is NOT below `Config::HEATING_MIN_OUTLET` (100°F).
     4.  Logic falls into the `else` branch of the normal priority logic.
 *   **Expected Results:**
-    *   **All Heating/Cooling Pins:** `LOW`
-    *   **System Mode:** `SYSTEM OFF` (Correctly clearing any previous 'HP COOLING' state)
+    *   **All Actuators (Pins 3, 4, 6):** `LOW`
+    *   **Circulators (Pins 7, 8):** `LOW` (Confirmed: OFF when demand is satisfied)
+    *   **System Mode:** `SYSTEM OFF`
 
 ## Test Scenario 3: Normal (Deadband)
 *   **Input Conditions:** Ambient = `68.0°F`.

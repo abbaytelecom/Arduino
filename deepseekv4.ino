@@ -212,9 +212,6 @@ void executeControlLogic() {
 }
 
 void processHeating(float deltaT) {
-  digitalWrite(PIN_CIRC_1, HIGH);
-  digitalWrite(PIN_CIRC_2, HIGH);
-
   bool hpOk = (g_data.ambient >= Config::HP_MIN_AMBIENT && g_data.ambient > Config::HP_CRITICAL_LOW);
   bool boilerLocked = (g_boilerStartTime > 0 && (millis() - g_boilerStartTime < Config::BOILER_MIN_RUNTIME));
 
@@ -225,6 +222,8 @@ void processHeating(float deltaT) {
     digitalWrite(PIN_HP_CH, LOW);
     digitalWrite(PIN_HP_COOL, LOW);
     digitalWrite(PIN_BOILER, HIGH);
+    digitalWrite(PIN_CIRC_1, HIGH);
+    digitalWrite(PIN_CIRC_2, HIGH);
     g_currentMode = SystemMode::BOILER_HEATING;
     return;
   }
@@ -241,10 +240,14 @@ void processHeating(float deltaT) {
       digitalWrite(PIN_HP_COOL, LOW);
       digitalWrite(PIN_HP_CH, HIGH);
       digitalWrite(PIN_BOILER, LOW);
+      digitalWrite(PIN_CIRC_1, HIGH);
+      digitalWrite(PIN_CIRC_2, HIGH);
     } else {
       // Sufficient temperature or low demand
       digitalWrite(PIN_HP_CH, LOW);
       digitalWrite(PIN_BOILER, LOW);
+      digitalWrite(PIN_CIRC_1, LOW);
+      digitalWrite(PIN_CIRC_2, LOW);
       g_currentMode = SystemMode::OFF;
     }
   } else {
@@ -252,17 +255,19 @@ void processHeating(float deltaT) {
     digitalWrite(PIN_HP_CH, LOW);
     if (g_data.tankOutlet < Config::HEATING_MIN_OUTLET) {
       digitalWrite(PIN_BOILER, HIGH);
+      digitalWrite(PIN_CIRC_1, HIGH);
+      digitalWrite(PIN_CIRC_2, HIGH);
       if (g_currentMode != SystemMode::ERROR) g_currentMode = SystemMode::BOILER_HEATING;
     } else {
       digitalWrite(PIN_BOILER, LOW);
+      digitalWrite(PIN_CIRC_1, LOW);
+      digitalWrite(PIN_CIRC_2, LOW);
       g_currentMode = SystemMode::OFF;
     }
   }
 }
 
 void processCooling(float deltaT) {
-  digitalWrite(PIN_CIRC_1, HIGH);
-  digitalWrite(PIN_CIRC_2, HIGH);
   digitalWrite(PIN_BOILER, LOW);
 
   bool inRange = (g_data.tankInlet >= Config::COOLING_MIN_INLET && g_data.tankInlet <= Config::COOLING_MAX_INLET);
@@ -273,13 +278,19 @@ void processCooling(float deltaT) {
       g_currentMode = SystemMode::HP_COOLING;
       digitalWrite(PIN_HP_CH, LOW);
       digitalWrite(PIN_HP_COOL, HIGH);
+      digitalWrite(PIN_CIRC_1, HIGH);
+      digitalWrite(PIN_CIRC_2, HIGH);
     } else {
       // In range but low demand or cooling satisfied
       digitalWrite(PIN_HP_COOL, LOW);
+      digitalWrite(PIN_CIRC_1, LOW);
+      digitalWrite(PIN_CIRC_2, LOW);
       g_currentMode = SystemMode::OFF;
     }
   } else {
     digitalWrite(PIN_HP_COOL, LOW);
+    digitalWrite(PIN_CIRC_1, LOW);
+    digitalWrite(PIN_CIRC_2, LOW);
     g_currentMode = SystemMode::OFF;
   }
 }
