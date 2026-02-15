@@ -241,7 +241,8 @@ void processHeating(float deltaT) {
       digitalWrite(PIN_HP_COOL, LOW);
       digitalWrite(PIN_HP_CH, HIGH);
       digitalWrite(PIN_BOILER, LOW);
-    } else if (deltaT <= Config::DELTA_T_HEATING_OFF) {
+    } else {
+      // Sufficient temperature or low demand
       digitalWrite(PIN_HP_CH, LOW);
       digitalWrite(PIN_BOILER, LOW);
       g_currentMode = SystemMode::OFF;
@@ -254,6 +255,7 @@ void processHeating(float deltaT) {
       if (g_currentMode != SystemMode::ERROR) g_currentMode = SystemMode::BOILER_HEATING;
     } else {
       digitalWrite(PIN_BOILER, LOW);
+      g_currentMode = SystemMode::OFF;
     }
   }
 }
@@ -271,12 +273,14 @@ void processCooling(float deltaT) {
       g_currentMode = SystemMode::HP_COOLING;
       digitalWrite(PIN_HP_CH, LOW);
       digitalWrite(PIN_HP_COOL, HIGH);
-    } else if (deltaT <= Config::DELTA_T_COOLING_OFF) {
+    } else {
+      // In range but low demand or cooling satisfied
       digitalWrite(PIN_HP_COOL, LOW);
       g_currentMode = SystemMode::OFF;
     }
   } else {
     digitalWrite(PIN_HP_COOL, LOW);
+    g_currentMode = SystemMode::OFF;
   }
 }
 
@@ -319,12 +323,12 @@ void printDebugTelemetry() {
   Serial.print(F("System Mode: ")); Serial.println(modeStr);
   Serial.print(F("Solar DHW: ")); Serial.println(g_solarActive ? F("ACTIVE") : F("IDLE"));
 
-  Serial.print(F("Tank Inlet: ")); Serial.print(g_data.tankInlet); Serial.println(F(" F"));
-  Serial.print(F("Tank Outlet: ")); Serial.print(g_data.tankOutlet); Serial.println(F(" F"));
-  Serial.print(F("DHW Tank: ")); Serial.print(g_data.dhwTank); Serial.println(F(" F"));
-  Serial.print(F("Ambient: ")); Serial.print(g_data.ambient); Serial.println(F(" F"));
-  Serial.print(F("Solar Coll: ")); Serial.print(g_data.solarCollector); Serial.println(F(" F"));
-  Serial.print(F("Humidity: ")); Serial.print(g_data.humidity); Serial.println(F(" %"));
+  Serial.print(F("n0 (Ambient): ")); Serial.print(g_data.ambient); Serial.println(F(" F"));
+  Serial.print(F("n1 (Inlet): ")); Serial.print(g_data.tankInlet); Serial.println(F(" F"));
+  Serial.print(F("n2 (Outlet): ")); Serial.print(g_data.tankOutlet); Serial.println(F(" F"));
+  Serial.print(F("n3 (DHW Tank): ")); Serial.print(g_data.dhwTank); Serial.println(F(" F"));
+  Serial.print(F("n4 (Solar Coll): ")); Serial.print(g_data.solarCollector); Serial.println(F(" F"));
+  Serial.print(F("n5 (Humidity): ")); Serial.print(g_data.humidity); Serial.println(F(" %"));
   Serial.print(F("Dew Point: ")); Serial.print(g_data.dewPoint); Serial.println(F(" F"));
   Serial.println(F("-----------------------"));
 }

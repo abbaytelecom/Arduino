@@ -27,6 +27,17 @@ This report documents the verification of the control logic within `deepseekv4.i
     *   **System Mode:** `BOILER_HEATING`
     *   **Anti-Short Cycle:** System will remain in this state for at least 10 minutes even if Delta T drops.
 
+## Test Scenario 6: Heating Satisfied (Stale State Prevention)
+*   **Input Conditions:** Ambient = `60.0°F`, Tank Outlet = `105°F`, Delta T = `15.0°F`.
+*   **Logic Path:**
+    1.  Ambient is below `Config::HEATING_THRESHOLD` (65°F).
+    2.  `processHeating` is called.
+    3.  Tank Outlet (105°F) is NOT below `Config::HEATING_MIN_OUTLET` (100°F).
+    4.  Logic falls into the `else` branch of the normal priority logic.
+*   **Expected Results:**
+    *   **All Heating/Cooling Pins:** `LOW`
+    *   **System Mode:** `OFF` (Correctly clearing any previous 'HP COOLING' state)
+
 ## Test Scenario 3: Normal (Deadband)
 *   **Input Conditions:** Ambient = `68.0°F`.
 *   **Logic Path:**
