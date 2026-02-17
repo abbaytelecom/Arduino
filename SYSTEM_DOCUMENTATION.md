@@ -97,10 +97,14 @@ The `dispatchHmiCommand` function processes incoming commands from the Nextion d
 - `FACTORY`: Triggers a reset of all thresholds to hardcoded factory defaults.
 
 #### Threshold Update Protocol
-Nextion updates are sent in the format: `SET:[ID]:[VAL]\n`.
-- **ID 0**: Heating Threshold
-- **ID 1**: Cooling Threshold
-- **ID 2**: HP Min Ambient
-- **ID 3**: DHW Max Temp
-- **ID 4**: Solar Delta T
-- **ID 5**: Boiler Min Runtime (Mins)
+Nextion updates are sent in the format: `SET:[ID]:[VAL]\n`. Arduino automatically saves these values to **EEPROM Emulation** Flash memory for persistence across reboots.
+
+- **ID 0**: Heating Threshold (n10/n20)
+- **ID 1**: Cooling Threshold (n11/n21)
+- **ID 2**: HP Min Ambient (n12/n22)
+- **ID 3**: DHW Max Temp (n13/n23)
+- **ID 4**: Solar Delta T (n14/n24)
+- **ID 5**: Boiler Min Runtime (n15/n25)
+
+#### Persistent Memory
+The controller uses a **MAGIC_ID** (0xDEEB5EE) to validate the integrity of stored settings. On the first boot, or after a manual **FACTORY** reset, default values are loaded into Flash.

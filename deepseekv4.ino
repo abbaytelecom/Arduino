@@ -1,6 +1,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <DHT.h>
+#include <EEPROM.h>
 
 /**
  * @file deepseekv4.ino
@@ -57,6 +58,23 @@ namespace Config {
   float SOLAR_DELTA_T_ON = 30.0f;
   uint32_t BOILER_MIN_RUNTIME = 600000; // 10 minutes in ms
 
+  const uint32_t MAGIC_ID = 0xDEEB5EE;
+
+  struct Settings {
+    uint32_t magic;
+    float heating;
+    float cooling;
+    float minAmbient;
+    float dhwMax;
+    float solarDelta;
+    uint32_t boilerRuntime;
+  };
+
+  void save() {
+    Settings s = { MAGIC_ID, HEATING_THRESHOLD, COOLING_THRESHOLD, HP_MIN_AMBIENT, DHW_MAX_TEMP, SOLAR_DELTA_T_ON, BOILER_MIN_RUNTIME };
+    EEPROM.put(0, s);
+  }
+
   void resetToDefaults() {
     HEATING_THRESHOLD = 65.0f;
     COOLING_THRESHOLD = 70.0f;
@@ -64,6 +82,22 @@ namespace Config {
     DHW_MAX_TEMP = 140.0f;
     SOLAR_DELTA_T_ON = 30.0f;
     BOILER_MIN_RUNTIME = 600000;
+    save();
+  }
+
+  void load() {
+    Settings s;
+    EEPROM.get(0, s);
+    if (s.magic == MAGIC_ID) {
+      HEATING_THRESHOLD = s.heating;
+      COOLING_THRESHOLD = s.cooling;
+      HP_MIN_AMBIENT = s.minAmbient;
+      DHW_MAX_TEMP = s.dhwMax;
+      SOLAR_DELTA_T_ON = s.solarDelta;
+      BOILER_MIN_RUNTIME = s.boilerRuntime;
+    } else {
+      resetToDefaults();
+    }
   }
 }
 
@@ -136,6 +170,7 @@ void setup() {
   pinMode(PIN_DEFROST, INPUT_PULLUP);
   pinMode(PIN_HP_FAIL, INPUT_PULLUP);
 
+  Config::load();
   performSafeShutdown();
   Serial.println(F("HVAC Control System Online"));
 }
@@ -436,12 +471,21 @@ void sendHmiTxt(const char* name, const char* txt) {
  * @brief Sends current configuration thresholds to the HMI settings page.
  */
 void syncSettingsToHmi() {
+  // Current Active Thresholds (Display Labels)
   sendHmiNum("n10", (int)Config::HEATING_THRESHOLD);
   sendHmiNum("n11", (int)Config::COOLING_THRESHOLD);
   sendHmiNum("n12", (int)Config::HP_MIN_AMBIENT);
   sendHmiNum("n13", (int)Config::DHW_MAX_TEMP);
   sendHmiNum("n14", (int)Config::SOLAR_DELTA_T_ON);
   sendHmiNum("n15", (int)(Config::BOILER_MIN_RUNTIME / 60000));
+
+  // Initialize Input Fields (Editable)
+  sendHmiNum("n20", (int)Config::HEATING_THRESHOLD);
+  sendHmiNum("n21", (int)Config::COOLING_THRESHOLD);
+  sendHmiNum("n22", (int)Config::HP_MIN_AMBIENT);
+  sendHmiNum("n23", (int)Config::DHW_MAX_TEMP);
+  sendHmiNum("n24", (int)Config::SOLAR_DELTA_T_ON);
+  sendHmiNum("n25", (int)(Config::BOILER_MIN_RUNTIME / 60000));
 }
 
 void refreshHmiDisplay() {
@@ -485,7 +529,8 @@ void dispatchHmiCommand(const String& cmd) {
         case 4: Config::SOLAR_DELTA_T_ON = val; break;
         case 5: Config::BOILER_MIN_RUNTIME = (uint32_t)(val * 60000); break;
       }
-      Serial.print(F("Config updated via HMI: ID ")); Serial.print(id); Serial.print(F(" = ")); Serial.println(val);
+      Config::save();
+      Serial.print(F("Config updated and saved via HMI: ID ")); Serial.print(id); Serial.print(F(" = ")); Serial.println(val);
     }
   } else if (cmd == F("FACTORY")) {
     Config::resetToDefaults();

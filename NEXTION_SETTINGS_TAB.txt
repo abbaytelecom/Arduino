@@ -1,62 +1,85 @@
-# Nextion HMI Settings Tab Implementation Guide (V2 - ASCII Protocol)
+# Nextion HMI Settings Tab Implementation Guide (V3 - Persistent Memory)
 
-To ensure compatibility with the Arduino ASCII parser, use the following logic in the Nextion Editor.
+This guide reflects the updated mapping for persistent threshold configuration.
 
 ## 1. Page Setup
 - Create `page1` for Settings.
-- Components needed:
-  - Number boxes: `n10` to `n15`
-  - Text components (can be hidden): `t10` to `t15` (used for ASCII conversion)
+- **Display Components (Read-only labels):** `n10` to `n15`. These show the values currently stored in the Arduino's memory.
+- **Input Components (Editable fields):** `n20` to `n25`. These are where the user makes changes.
+- **Helper Text Components:** `t10` to `t15` (for ASCII conversion).
 
 ## 2. Page Entry Event (Post-init)
+Request a sync to populate both the labels and the initial input values.
 ```nextion
 print "SYNC"
 print "\r\n"
 ```
 
-## 3. Save Button Logic (`b10`)
-For each threshold, convert the numeric value to a string using `covx` before printing.
+## 3. Numeric Mapping Reference
+| Setting | Current Label | Input Field | ID |
+|:---|:---:|:---:|:---:|
+| Heating Threshold | `n10` | `n20` | 0 |
+| Cooling Threshold | `n11` | `n21` | 1 |
+| HP Min Ambient | `n12` | `n22` | 2 |
+| DHW Max Temp | `n13` | `n23` | 3 |
+| Solar Delta T | `n14` | `n24` | 4 |
+| Boiler Runtime | `n15` | `n25` | 5 |
+
+## 4. Button Logic
+
+### Save Changes (`b10`)
+Converts the values in the **Input Fields (n20-n25)** to strings and sends them to Arduino. Arduino will automatically save them to its internal persistent memory.
 
 ```nextion
-// ID 0: Heating Threshold
-covx n10.val,t10.txt,0,0
+// ID 0: Heating
+covx n20.val,t10.txt,0,0
 print "SET:0:"
 print t10.txt
 print "\r\n"
 
-// ID 1: Cooling Threshold
-covx n11.val,t11.txt,0,0
+// ID 1: Cooling
+covx n21.val,t11.txt,0,0
 print "SET:1:"
 print t11.txt
 print "\r\n"
 
-// ID 2: HP Min Ambient
-covx n12.val,t12.txt,0,0
+// ID 2: HP Ambient
+covx n22.val,t12.txt,0,0
 print "SET:2:"
 print t12.txt
 print "\r\n"
 
-// ID 3: DHW Max Temp
-covx n13.val,t13.txt,0,0
+// ID 3: DHW Max
+covx n23.val,t13.txt,0,0
 print "SET:3:"
 print t13.txt
 print "\r\n"
 
-// ID 4: Solar Delta T
-covx n14.val,t14.txt,0,0
+// ID 4: Solar Delta
+covx n24.val,t14.txt,0,0
 print "SET:4:"
 print t14.txt
 print "\r\n"
 
-// ID 5: Boiler Runtime
-covx n15.val,t15.txt,0,0
+// ID 5: Boiler Mins
+covx n25.val,t15.txt,0,0
 print "SET:5:"
 print t15.txt
 print "\r\n"
+
+// Request refresh to update labels
+print "SYNC"
+print "\r\n"
 ```
 
-## 4. Arduino Protocol Reference
-The Arduino expects commands ending in a Newline (`\n`).
-- `SYNC\n`: Arduino sends current values to `n10`-`n15`.
-- `FACTORY\n`: Arduino restores defaults and re-syncs.
-- `SET:[ID]:[VAL]\n`: Updates a specific threshold.
+### Factory Reset (`b12`)
+```nextion
+print "FACTORY"
+print "\r\n"
+```
+
+### Cancel / Refresh (`b11`)
+```nextion
+print "SYNC"
+print "\r\n"
+```
