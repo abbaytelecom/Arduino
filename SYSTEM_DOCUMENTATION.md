@@ -83,5 +83,24 @@ The Nextion display is updated every 3 seconds. The firmware utilizes an **optim
 ### Actuator Logic (Circulator Pumps)
 The **First Floor Circulator (Pin 7)** and **Second Floor Circulator (Pin 8)** are interlocked with the system mode. They are only active when the system is in an active heating or cooling state. If the System Mode is **SYSTEM OFF**, both circulators are forced **OFF** to conserve energy.
 
+### Safety & Protection Logic
+- **Boiler High-Limit:** The Boiler will automatically shut off if the Tank Outlet exceeds `HEATING_MIN_OUTLET + 10°F` (110°F), even during a takeover lock.
+- **Overheat Valve:** The **Overheat Valve (Pin 15)** is automatically activated (HIGH) if the DHW Tank exceeds `DHW_MAX_TEMP` (140°F).
+- **Cooling Hysteresis:** The system uses `DELTA_T_COOLING_OFF` to prevent rapid cycling of the heat pump in cooling mode.
+
 ### Command Dispatcher
-The `dispatchHmiCommand` function allows the display to trigger specific actions, such as resetting the system after an error state has been cleared.
+The `dispatchHmiCommand` function processes incoming commands from the Nextion display.
+
+#### Control Commands
+- `0`: Clears system errors and returns to `SYSTEM_OFF`.
+- `SYNC`: Requests the Arduino to transmit current thresholds to the HMI (`n10`-`n15`).
+- `FACTORY`: Triggers a reset of all thresholds to hardcoded factory defaults.
+
+#### Threshold Update Protocol
+Nextion updates are sent in the format: `SET:[ID]:[VAL]\n`.
+- **ID 0**: Heating Threshold
+- **ID 1**: Cooling Threshold
+- **ID 2**: HP Min Ambient
+- **ID 3**: DHW Max Temp
+- **ID 4**: Solar Delta T
+- **ID 5**: Boiler Min Runtime (Mins)

@@ -72,5 +72,16 @@ This report documents the verification of the control logic within `deepseekv4.i
     *   **Circulators (Pins 7/8):** `HIGH` (Maintains flow)
     *   **System Mode:** `SYSTEM OFF` (Wait for thermal recovery)
 
+## Test Scenario 7: DHW Overheat Protection
+*   **Input Conditions:** DHW Tank = `145.0°F` (Threshold 140°F).
+*   **Logic Path:**
+    1.  `processSolar` detects Tank >= `DHW_MAX_TEMP`.
+    2.  Solar Pump (Pin 14) is forced LOW.
+    3.  Overheat Valve (Pin 15) is forced HIGH.
+*   **Expected Results:**
+    *   **Solar Pump (Pin 14):** `LOW`
+    *   **Overheat Valve (Pin 15):** `HIGH`
+    *   **HMI t1:** `DHW OVERHEAT`
+
 ## Conclusion
 The logic walkthrough confirms that the firmware correctly prioritizes equipment safety (Dew Point protection, Ambient limits) and successfully manages multi-stage heating resources.

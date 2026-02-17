@@ -1,0 +1,62 @@
+# Nextion HMI Settings Tab Implementation Guide (V2 - ASCII Protocol)
+
+To ensure compatibility with the Arduino ASCII parser, use the following logic in the Nextion Editor.
+
+## 1. Page Setup
+- Create `page1` for Settings.
+- Components needed:
+  - Number boxes: `n10` to `n15`
+  - Text components (can be hidden): `t10` to `t15` (used for ASCII conversion)
+
+## 2. Page Entry Event (Post-init)
+```nextion
+print "SYNC"
+print "\r\n"
+```
+
+## 3. Save Button Logic (`b10`)
+For each threshold, convert the numeric value to a string using `covx` before printing.
+
+```nextion
+// ID 0: Heating Threshold
+covx n10.val,t10.txt,0,0
+print "SET:0:"
+print t10.txt
+print "\r\n"
+
+// ID 1: Cooling Threshold
+covx n11.val,t11.txt,0,0
+print "SET:1:"
+print t11.txt
+print "\r\n"
+
+// ID 2: HP Min Ambient
+covx n12.val,t12.txt,0,0
+print "SET:2:"
+print t12.txt
+print "\r\n"
+
+// ID 3: DHW Max Temp
+covx n13.val,t13.txt,0,0
+print "SET:3:"
+print t13.txt
+print "\r\n"
+
+// ID 4: Solar Delta T
+covx n14.val,t14.txt,0,0
+print "SET:4:"
+print t14.txt
+print "\r\n"
+
+// ID 5: Boiler Runtime
+covx n15.val,t15.txt,0,0
+print "SET:5:"
+print t15.txt
+print "\r\n"
+```
+
+## 4. Arduino Protocol Reference
+The Arduino expects commands ending in a Newline (`\n`).
+- `SYNC\n`: Arduino sends current values to `n10`-`n15`.
+- `FACTORY\n`: Arduino restores defaults and re-syncs.
+- `SET:[ID]:[VAL]\n`: Updates a specific threshold.

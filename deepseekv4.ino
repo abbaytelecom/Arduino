@@ -41,9 +41,9 @@ enum class SystemMode : uint8_t {
 
 // --- Configurable Thresholds (°F) ---
 namespace Config {
-  constexpr float HEATING_THRESHOLD = 65.0f;
-  constexpr float COOLING_THRESHOLD = 70.0f;
-  constexpr float HP_MIN_AMBIENT = 5.0f;
+  float HEATING_THRESHOLD = 65.0f;
+  float COOLING_THRESHOLD = 70.0f;
+  float HP_MIN_AMBIENT = 5.0f;
   constexpr float HP_CRITICAL_LOW = -4.0f;
   constexpr float DELTA_T_HEATING_OFF = 20.0f;
   constexpr float DELTA_T_HEATING_ON = 25.0f;
@@ -53,9 +53,18 @@ namespace Config {
   constexpr float HEATING_MIN_OUTLET = 100.0f;
   constexpr float COOLING_MIN_INLET = 42.0f;
   constexpr float COOLING_MAX_INLET = 65.0f;
-  constexpr float DHW_MAX_TEMP = 140.0f;
-  constexpr float SOLAR_DELTA_T_ON = 30.0f;
-  constexpr uint32_t BOILER_MIN_RUNTIME = 600000; // 10 minutes in ms
+  float DHW_MAX_TEMP = 140.0f;
+  float SOLAR_DELTA_T_ON = 30.0f;
+  uint32_t BOILER_MIN_RUNTIME = 600000; // 10 minutes in ms
+
+  void resetToDefaults() {
+    HEATING_THRESHOLD = 65.0f;
+    COOLING_THRESHOLD = 70.0f;
+    HP_MIN_AMBIENT = 5.0f;
+    DHW_MAX_TEMP = 140.0f;
+    SOLAR_DELTA_T_ON = 30.0f;
+    BOILER_MIN_RUNTIME = 600000;
+  }
 }
 
 // --- System State ---
@@ -215,6 +224,17 @@ void processHeating(float deltaT) {
   bool hpOk = (g_data.ambient >= Config::HP_MIN_AMBIENT && g_data.ambient > Config::HP_CRITICAL_LOW);
   bool boilerLocked = (g_boilerStartTime > 0 && (millis() - g_boilerStartTime < Config::BOILER_MIN_RUNTIME));
 
+  // Safety: High-limit thermostat cutoff to prevent runaway conditions
+  if (g_data.tankOutlet >= (Config::HEATING_MIN_OUTLET + 10.0f)) {
+    digitalWrite(PIN_BOILER, LOW);
+    digitalWrite(PIN_HP_CH, LOW);
+    digitalWrite(PIN_CIRC_1, LOW);
+    digitalWrite(PIN_CIRC_2, LOW);
+    g_currentMode = SystemMode::OFF;
+    g_boilerStartTime = 0;
+    return;
+  }
+
   // 1. Forced Boiler Takeover (High Delta T or Lock-in)
   if (deltaT >= Config::DELTA_T_HEATING_ON || boilerLocked) {
     if (g_boilerStartTime == 0) g_boilerStartTime = millis();
@@ -228,7 +248,7 @@ void processHeating(float deltaT) {
     return;
   }
 
-  // Reset lock if we are below threshold and dwell time expired
+  // Reset lock if demand is satisfied or dwell time expired
   if (deltaT <= Config::DELTA_T_HEATING_OFF) {
     g_boilerStartTime = 0;
   }
@@ -280,8 +300,8 @@ void processCooling(float deltaT) {
       digitalWrite(PIN_HP_COOL, HIGH);
       digitalWrite(PIN_CIRC_1, HIGH);
       digitalWrite(PIN_CIRC_2, HIGH);
-    } else {
-      // In range but low demand or cooling satisfied
+    } else if (deltaT <= Config::DELTA_T_COOLING_OFF || g_currentMode != SystemMode::HP_COOLING) {
+      // Demand satisfied or hysteresis threshold met
       digitalWrite(PIN_HP_COOL, LOW);
       digitalWrite(PIN_CIRC_1, LOW);
       digitalWrite(PIN_CIRC_2, LOW);
@@ -298,12 +318,23 @@ void processCooling(float deltaT) {
 void processSolar() {
   if (g_data.solarCollector == DEVICE_DISCONNECTED_F || g_data.dhwTank == DEVICE_DISCONNECTED_F) {
     digitalWrite(PIN_SOLAR_PUMP, LOW);
+    digitalWrite(PIN_OVERHEAT_VALVE, LOW);
     g_solarActive = false;
     return;
   }
 
-  if ((g_data.solarCollector - g_data.dhwTank) >= Config::SOLAR_DELTA_T_ON &&
-      g_data.dhwTank < Config::DHW_MAX_TEMP) {
+  // Overheat Protection
+  if (g_data.dhwTank >= Config::DHW_MAX_TEMP) {
+    g_solarActive = false;
+    digitalWrite(PIN_SOLAR_PUMP, LOW);
+    digitalWrite(PIN_OVERHEAT_VALVE, HIGH);
+    return;
+  } else {
+    digitalWrite(PIN_OVERHEAT_VALVE, LOW);
+  }
+
+  // Normal Differential Logic
+  if ((g_data.solarCollector - g_data.dhwTank) >= Config::SOLAR_DELTA_T_ON) {
     g_solarActive = true;
     digitalWrite(PIN_SOLAR_PUMP, HIGH);
   } else {
@@ -401,6 +432,18 @@ void sendHmiTxt(const char* name, const char* txt) {
   Serial1.write(NEXTION_END, 3);
 }
 
+/**
+ * @brief Sends current configuration thresholds to the HMI settings page.
+ */
+void syncSettingsToHmi() {
+  sendHmiNum("n10", (int)Config::HEATING_THRESHOLD);
+  sendHmiNum("n11", (int)Config::COOLING_THRESHOLD);
+  sendHmiNum("n12", (int)Config::HP_MIN_AMBIENT);
+  sendHmiNum("n13", (int)Config::DHW_MAX_TEMP);
+  sendHmiNum("n14", (int)Config::SOLAR_DELTA_T_ON);
+  sendHmiNum("n15", (int)(Config::BOILER_MIN_RUNTIME / 60000));
+}
+
 void refreshHmiDisplay() {
   // 1. Update Numeric Fields (n0 - n5) using optimized iteration
   const float* telemetryRefs[] = {
@@ -424,22 +467,37 @@ void refreshHmiDisplay() {
 
 /**
  * @brief Dispatches commands received from the Nextion HMI.
- * @param cmd The command character ('0'-'9')
+ * @param cmd Command string
  */
-void dispatchHmiCommand(char cmd) {
-  Serial.print(F("HMI Command Executing: "));
-  Serial.println(cmd);
-
-  switch (cmd) {
-    case '0': // Normal / Reset
-      if (g_currentMode == SystemMode::ERROR) {
-        g_currentMode = SystemMode::OFF;
-        Serial.println(F("System Error Cleared by HMI"));
+void dispatchHmiCommand(const String& cmd) {
+  if (cmd.startsWith(F("SET:"))) {
+    // Expected format: SET:ID:VAL
+    int firstColon = cmd.indexOf(':');
+    int lastColon = cmd.lastIndexOf(':');
+    if (firstColon != -1 && lastColon != -1 && firstColon != lastColon) {
+      int id = cmd.substring(firstColon + 1, lastColon).toInt();
+      float val = cmd.substring(lastColon + 1).toFloat();
+      switch (id) {
+        case 0: Config::HEATING_THRESHOLD = val; break;
+        case 1: Config::COOLING_THRESHOLD = val; break;
+        case 2: Config::HP_MIN_AMBIENT = val; break;
+        case 3: Config::DHW_MAX_TEMP = val; break;
+        case 4: Config::SOLAR_DELTA_T_ON = val; break;
+        case 5: Config::BOILER_MIN_RUNTIME = (uint32_t)(val * 60000); break;
       }
-      break;
-    default:
-      Serial.println(F("Unhandled HMI Command"));
-      break;
+      Serial.print(F("Config updated via HMI: ID ")); Serial.print(id); Serial.print(F(" = ")); Serial.println(val);
+    }
+  } else if (cmd == F("FACTORY")) {
+    Config::resetToDefaults();
+    syncSettingsToHmi();
+    Serial.println(F("Factory Reset applied via HMI"));
+  } else if (cmd == F("SYNC")) {
+    syncSettingsToHmi();
+  } else if (cmd == F("0")) {
+    if (g_currentMode == SystemMode::ERROR) {
+      g_currentMode = SystemMode::OFF;
+      Serial.println(F("System Error Cleared by HMI"));
+    }
   }
 }
 
@@ -447,14 +505,15 @@ void dispatchHmiCommand(char cmd) {
  * @brief Listens and parses serial data from the Nextion display.
  */
 void processHmiInput() {
+  static String incomingCmd = "";
   while (Serial1.available()) {
-    uint8_t c = Serial1.read();
-
-    if (c >= '0' && c <= '9') {
-      dispatchHmiCommand((char)c);
-    } else if (c == 0x65) { // Nextion Touch Event Prefix
-      uint8_t buffer[6];
-      Serial1.readBytes(buffer, 6);
+    char c = (char)Serial1.read();
+    if (c == '\n') {
+      incomingCmd.trim();
+      if (incomingCmd.length() > 0) dispatchHmiCommand(incomingCmd);
+      incomingCmd = "";
+    } else if (c >= 32 && c <= 126) {
+      incomingCmd += c;
     }
   }
 }
